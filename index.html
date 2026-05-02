@@ -1,0 +1,2781 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Lamplit ✦</title>
+<link href="https://fonts.googleapis.com/css2?family=DM+Serif+Display:ital@0;1&family=DM+Sans:opsz,wght@9..40,300;9..40,400;9..40,500;9..40,600&family=DM+Mono:wght@400;500&family=Almendra:ital,wght@0,400;0,700;1,400;1,700&display=swap" rel="stylesheet">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script>
+// ════════════════════════════════════════════════
+//  SUPABASE CONFIG
+// ════════════════════════════════════════════════
+const SUPA_URL = 'https://uygvbwhzboujjjiowqcp.supabase.co';
+const SUPA_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InV5Z3Zid2h6Ym91ampqaW93cWNwIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Nzc3MTk1MTcsImV4cCI6MjA5MzI5NTUxN30.RbaRTbx7vWTAlxfBe_vsiW8p51vY6B5co_wGQwn57jg';
+const supa = supabase.createClient(SUPA_URL, SUPA_KEY);
+
+// ════════════════════════════════════════════════
+//  DB HELPERS — all async, wrapping Supabase calls
+// ════════════════════════════════════════════════
+const DB = {
+  // ── USERS ──
+  async getUser(identOrId) {
+    const { data } = await supa.from('users').select('*')
+      .or(`username.eq.${identOrId},email.eq.${identOrId},id.eq.${identOrId}`)
+      .limit(1).single();
+    return data;
+  },
+  async getUserById(id) {
+    const { data } = await supa.from('users').select('*').eq('id', id).single();
+    return data;
+  },
+  async getAllUsers() {
+    const { data, error } = await supa.from('users').select('*').order('created_at');
+    if(error){console.warn('getAllUsers error:',error.message);return[];}
+    return data || [];
+  },
+  async upsertUser(user) {
+    const row = {
+      id: user.id, username: user.username, email: user.email,
+      pass_hash: user.passHash || user.pass_hash, role: user.role,
+      artist_profile: user.artistProfile || user.artist_profile || null,
+    };
+    const { data } = await supa.from('users').upsert(row).select().single();
+    return data;
+  },
+  async deleteUser(id) {
+    await supa.from('users').delete().eq('id', id);
+  },
+
+  // ── LAMPGOS ──
+  async getLampGOs() {
+    const { data, error } = await supa.from('lampgos').select('*').order('created_at', { ascending: false });
+    if(error){console.warn('getLampGOs error:',error.message);return[];}
+    return data || [];
+  },
+  async getLampGO(id) {
+    const { data } = await supa.from('lampgos').select('*').eq('id', id).single();
+    return data;
+  },
+  async upsertLampGO(go) {
+    const row = {
+      id: go.id, name: go.name, fandom: go.fandom||'',
+      description: go.desc||go.description||'', payment_info: go.paymentInfo||go.payment_info||'',
+      deadline: go.deadline||null, max_slots: go.maxSlots||go.max_slots||0,
+      items: go.items||[], go_status: go.goStatus||go.go_status||'active',
+      archived: go.archived||false, owner_id: go.ownerId||go.owner_id,
+      linked_artist_id: go.linkedArtistId||go.linked_artist_id||null,
+      shared_with: go.sharedWith||go.shared_with||[],
+      reminder_days: go.reminderDays||go.reminder_days||[7,3,1],
+    };
+    const { data } = await supa.from('lampgos').upsert(row).select().single();
+    return data;
+  },
+  async deleteLampGO(id) {
+    await supa.from('lampgos').delete().eq('id', id);
+  },
+
+  // ── ORDERS ──
+  async getOrders(lampgoId) {
+    const { data, error } = await supa.from('orders').select('*').eq('lampgo_id', lampgoId).order('created_at');
+    if(error){console.warn('getOrders error:',error.message);return[];}
+    return data || [];
+  },
+  async getAllOrdersForUser(email, username) {
+    const { data, error } = await supa.from('orders').select('*, lampgos(name, items)').or(`email.eq.${email},username.eq.${username}`).order('created_at', { ascending: false });
+    if(error){console.warn('getAllOrdersForUser error:',error.message);return[];}
+    return data || [];
+  },
+  async upsertOrder(order) {
+    const row = {
+      id: order.id, lampgo_id: order.lampgoId||order.lampgo_id,
+      buyer_user_id: order.buyerUserId||order.buyer_user_id||null,
+      fname: order.fname, lname: order.lname, username: order.username,
+      email: order.email, addr1: order.addr1, addr2: order.addr2||'',
+      city: order.city, state: order.state, zip: order.zip, country: order.country,
+      items: order.items, total: order.total,
+      pay_img_data: order.payImgData||order.pay_img_data||'',
+      notes: order.notes||'', status: order.status||'pending', tracking: order.tracking||'',
+    };
+    const { data } = await supa.from('orders').upsert(row).select().single();
+    return data;
+  },
+  async updateOrderStatus(id, status) {
+    await supa.from('orders').update({ status }).eq('id', id);
+  },
+  async updateOrderTracking(id, tracking) {
+    await supa.from('orders').update({ tracking }).eq('id', id);
+  },
+
+  // ── COLLECTION ──
+  async getCollection(userId) {
+    const { data, error } = await supa.from('collection').select('*').eq('user_id', userId).order('created_at', { ascending: false });
+    if(error){console.warn('getCollection error:',error.message);return[];}
+    return data || [];
+  },
+  async getAllForSale() {
+    const { data, error } = await supa.from('collection').select('*, users(username)').eq('for_sale', true).eq('is_private', false).is('sold_date', null);
+    if(error){console.warn('getAllForSale error:',error.message);return[];}
+    return data || [];
+  },
+  async upsertCollItem(item) {
+    const row = {
+      id: item.id, user_id: item.userId||item.user_id,
+      name: item.name, img_data: item.imgData||item.img_data||'',
+      fandom: item.fandom||'', characters: item.characters||'',
+      product_type: item.productType||item.product_type||'',
+      artist: item.artist||'', purchased_from: item.purchasedFrom||item.purchased_from||'',
+      purchase_date: item.purchaseDate||item.purchase_date||null,
+      item_price: item.itemPrice||item.item_price||0,
+      shipping_paid: item.shippingPaid||item.shipping_paid||0,
+      total_paid: item.totalPaid||item.total_paid||0,
+      from_lampgo_id: item.fromGOid||item.from_lampgo_id||null,
+      from_order_id: item.fromOrderId||item.from_order_id||'',
+      shipping_status: item.shippingStatus||item.shipping_status||'delivered',
+      still_have: item.stillHave!==undefined?item.stillHave:item.still_have!==undefined?item.still_have:true,
+      for_sale: item.forSale||item.for_sale||false,
+      sale_price: item.salePrice||item.sale_price||0,
+      sold_price: item.soldPrice||item.sold_price||0,
+      sold_date: item.soldDate||item.sold_date||null,
+      is_private: item.isPrivate!==undefined?item.isPrivate:item.is_private!==undefined?item.is_private:true,
+    };
+    const { data } = await supa.from('collection').upsert(row).select().single();
+    return data;
+  },
+  async deleteCollItem(id) {
+    await supa.from('collection').delete().eq('id', id);
+  },
+
+  // ── MESSAGES ──
+  async getMessages(convKey) {
+    const { data, error } = await supa.from('messages').select('*').eq('conv_key', convKey).order('created_at');
+    if(error){console.warn('getMessages error:',error.message);return[];}
+    return data || [];
+  },
+  async getInbox(uid) {
+    const { data, error } = await supa.from('messages').select('*')
+      .or(`from_uid.eq.${uid},to_uid.eq.${uid}`)
+      .order('created_at', { ascending: false });
+    if(error){console.warn('getInbox error:',error.message);return[];}
+    return data || [];
+  },
+  async sendMessage(msg) {
+    const { data } = await supa.from('messages').insert({
+      id: msg.id, from_uid: msg.fromUid, to_uid: msg.toUid,
+      item_id: msg.itemId||null, conv_key: msg.convKey,
+      text: msg.text, read: false,
+    }).select().single();
+    return data;
+  },
+  async markRead(convKey, uid) {
+    await supa.from('messages').update({ read: true }).eq('conv_key', convKey).eq('to_uid', uid);
+  },
+
+  // ── DRAFTS ──
+  async saveDraft(draft) {
+    const row = {
+      id: draft.id, lampgo_id: draft.lampgoId||draft.lampgo_id,
+      email: draft.email, fname: draft.fname||'', lname: draft.lname||'',
+      username: draft.username||'', addr1: draft.addr1||'', addr2: draft.addr2||'',
+      city: draft.city||'', state: draft.state||'', zip: draft.zip||'',
+      country: draft.country||'United States', items: draft.items||[], notes: draft.notes||'',
+    };
+    await supa.from('drafts').upsert(row, { onConflict: 'lampgo_id,email' });
+  },
+  async getDraft(lampgoId, email) {
+    const { data } = await supa.from('drafts').select('*')
+      .eq('lampgo_id', lampgoId).eq('email', email).single();
+    return data;
+  },
+  async deleteDraft(lampgoId, email) {
+    await supa.from('drafts').delete().eq('lampgo_id', lampgoId).eq('email', email);
+  },
+};
+
+// ════════════════════════════════════════════════
+//  NORMALIZE — convert snake_case DB rows to
+//  the camelCase shape the UI expects
+// ════════════════════════════════════════════════
+function normUser(u) {
+  if (!u) return null;
+  return { ...u, passHash: u.pass_hash, artistProfile: u.artist_profile, createdAt: u.created_at };
+}
+function normGO(g, orders=[]) {
+  if (!g) return null;
+  return {
+    ...g, desc: g.description, paymentInfo: g.payment_info,
+    maxSlots: g.max_slots, goStatus: g.go_status, ownerId: g.owner_id,
+    linkedArtistId: g.linked_artist_id, sharedWith: g.shared_with||[],
+    reminderDays: g.reminder_days||[7,3,1], createdAt: g.created_at,
+    orders: orders.map(normOrder),
+  };
+}
+function normOrder(o) {
+  if (!o) return null;
+  return {
+    ...o, lampgoId: o.lampgo_id, buyerUserId: o.buyer_user_id,
+    payImgData: o.pay_img_data, createdAt: o.created_at,
+  };
+}
+function normCollItem(i) {
+  if (!i) return null;
+  return {
+    ...i, userId: i.user_id, imgData: i.img_data, productType: i.product_type,
+    purchasedFrom: i.purchased_from, purchaseDate: i.purchase_date,
+    itemPrice: i.item_price, shippingPaid: i.shipping_paid, totalPaid: i.total_paid,
+    fromGOid: i.from_lampgo_id, fromOrderId: i.from_order_id,
+    shippingStatus: i.shipping_status, stillHave: i.still_have,
+    forSale: i.for_sale, salePrice: i.sale_price,
+    soldPrice: i.sold_price, soldDate: i.sold_date, isPrivate: i.is_private,
+    createdAt: i.created_at,
+  };
+}
+</script>
+<style>
+:root{
+  --bg:#faf6f6;--surface:#fff;--surface2:#f7f0f0;--surface3:#ede3e3;
+  --border:#ead8d8;--border2:#d4b8b8;
+  --text:#2a1818;--muted:#8a6e6e;--muted2:#b89898;
+  --accent:#b83232;--accent-l:#f5d8d8;--accent-ll:#fdf2f2;
+  --green:#7a9e7e;--green-l:#e4efdf;
+  --pink:#d4729a;--pink-l:#fae8f0;
+  --blue:#5b84b1;--blue-l:#e3ecf5;
+  --yellow:#c4962a;--yellow-l:#fdf0d5;
+  --red:#8f1f1f;--red-l:#fce8e6;
+  --purple:#8b6bb1;--purple-l:#ede8f5;
+  --teal:#3d8f8f;--teal-l:#d8f0f0;
+  --owner:#b83232;--owner-l:#f5d8d8;
+  --artist:#9b4dca;--artist-l:#f0e6ff;
+  --shadow:0 2px 12px rgba(42,18,18,.08);
+  --shadow-md:0 4px 20px rgba(42,18,18,.12);
+  --shadow-lg:0 8px 40px rgba(42,18,18,.16);
+  --r:12px;
+}
+*{box-sizing:border-box;margin:0;padding:0;}
+body{font-family:'DM Sans',sans-serif;background:var(--bg);color:var(--text);min-height:100vh;}
+
+/* AUTH */
+.auth-wrap{min-height:100vh;display:flex;align-items:center;justify-content:center;padding:24px;background:var(--bg);}
+.auth-card{background:var(--surface);border:1.5px solid var(--border);border-radius:20px;padding:34px 38px;width:100%;max-width:460px;box-shadow:var(--shadow-lg);}
+.auth-logo{display:flex;align-items:center;gap:10px;justify-content:center;margin-bottom:26px;}
+.auth-logo-name{font-family:'Almendra',serif;font-size:26px;font-weight:700;letter-spacing:.01em;}
+.auth-logo-name em{color:var(--accent);font-style:italic;}
+.auth-tabs{display:flex;background:var(--surface2);border-radius:9px;padding:3px;margin-bottom:22px;}
+.auth-tab{flex:1;text-align:center;padding:7px;border-radius:7px;font-size:13px;font-weight:500;cursor:pointer;color:var(--muted);transition:all .15s;}
+.auth-tab.active{background:var(--surface);color:var(--text);box-shadow:var(--shadow);}
+.auth-form{display:none;}
+.auth-form.active{display:block;}
+.auth-title{font-family:'Almendra',serif;font-size:21px;margin-bottom:5px;}
+.auth-sub{font-size:13px;color:var(--muted);margin-bottom:20px;line-height:1.5;}
+.field{margin-bottom:13px;}
+.lbl{display:block;font-size:12px;font-weight:600;color:var(--muted);text-transform:uppercase;letter-spacing:.06em;margin-bottom:5px;}
+.inp,.sel,.textarea{background:var(--surface);border:1.5px solid var(--border);border-radius:9px;padding:9px 13px;font-size:13px;font-family:'DM Sans',sans-serif;color:var(--text);outline:none;width:100%;transition:border-color .15s;}
+.inp:focus,.sel:focus,.textarea:focus{border-color:var(--accent);box-shadow:0 0 0 3px var(--accent-ll);}
+.inp::placeholder{color:var(--muted2);}
+.textarea{resize:vertical;min-height:68px;}
+.sel{appearance:none;background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='8'%3E%3Cpath d='M1 1l5 5 5-5' stroke='%238a7d6e' stroke-width='1.5' fill='none' stroke-linecap='round'/%3E%3C/svg%3E");background-repeat:no-repeat;background-position:right 12px center;padding-right:32px;}
+.role-grid{display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;margin-bottom:14px;}
+.role-opt{border:1.5px solid var(--border);border-radius:9px;padding:12px 8px;text-align:center;cursor:pointer;transition:all .15s;}
+.role-opt:hover{border-color:var(--border2);}
+.role-opt.selected{border-color:var(--accent);background:var(--accent-ll);}
+.role-opt .ri{font-size:22px;margin-bottom:4px;}
+.role-opt .rn{font-size:12px;font-weight:600;}
+.role-opt .rd{font-size:10px;color:var(--muted);margin-top:2px;line-height:1.3;}
+.pending-notice{background:var(--yellow-l);border:1.5px solid var(--yellow);border-radius:9px;padding:12px 15px;font-size:12px;line-height:1.6;color:#7a5c0e;margin-top:9px;display:none;}
+
+/* HEADER */
+.hdr{background:var(--surface);border-bottom:1.5px solid var(--border);padding:0 28px;height:58px;display:flex;align-items:center;justify-content:space-between;position:sticky;top:0;z-index:300;box-shadow:var(--shadow);}
+.logo{display:flex;align-items:center;gap:9px;cursor:pointer;}
+.logo-name{font-family:'Almendra',serif;font-size:22px;font-weight:700;letter-spacing:.01em;}
+.logo-name em{color:var(--accent);font-style:italic;}
+.hdr-right{display:flex;align-items:center;gap:9px;}
+.user-chip{display:flex;align-items:center;gap:7px;background:var(--surface2);border:1.5px solid var(--border);border-radius:20px;padding:4px 11px 4px 6px;cursor:pointer;transition:all .15s;}
+.user-chip:hover{border-color:var(--border2);}
+.user-av{width:24px;height:24px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:10px;font-weight:700;color:#fff;flex-shrink:0;}
+.av-owner{background:var(--owner);}.av-host{background:var(--accent);}.av-customer{background:var(--blue);}.av-artist{background:var(--artist);}
+.role-badge{font-size:10px;font-weight:700;padding:2px 7px;border-radius:10px;text-transform:uppercase;letter-spacing:.05em;}
+.rb-owner{background:var(--owner-l);color:var(--owner);}.rb-host{background:var(--accent-l);color:var(--accent);}.rb-customer{background:var(--blue-l);color:var(--blue);}.rb-artist{background:var(--artist-l);color:var(--artist);}
+.user-menu{display:none;position:absolute;top:58px;right:28px;background:var(--surface);border:1.5px solid var(--border);border-radius:12px;padding:7px;box-shadow:var(--shadow-lg);z-index:400;min-width:155px;}
+
+/* NAV */
+.nav{background:var(--surface);border-bottom:1.5px solid var(--border);padding:0 28px;display:flex;overflow-x:auto;}
+.nav::-webkit-scrollbar{display:none;}
+.tab{padding:12px 15px;font-size:13px;font-weight:500;color:var(--muted);cursor:pointer;border-bottom:2.5px solid transparent;white-space:nowrap;flex-shrink:0;transition:all .15s;}
+.tab:hover{color:var(--text);}
+.tab.active{color:var(--accent);border-bottom-color:var(--accent);}
+.tab-group-label{padding:0 10px;font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.1em;color:var(--muted2);display:flex;align-items:center;border-bottom:2.5px solid transparent;flex-shrink:0;white-space:nowrap;}
+
+/* PAGE */
+.page{padding:24px 28px;max-width:1300px;}
+.view{display:none;}
+.view.active{display:block;}
+.section-title{font-family:'Almendra',serif;font-size:22px;margin-bottom:4px;}
+.section-sub{font-size:13px;color:var(--muted);margin-bottom:20px;}
+
+/* BUTTONS */
+.btn{display:inline-flex;align-items:center;gap:6px;padding:7px 15px;border-radius:9px;font-size:13px;font-weight:500;cursor:pointer;border:1.5px solid transparent;font-family:'DM Sans',sans-serif;transition:all .13s;white-space:nowrap;}
+.btn:hover{transform:translateY(-1px);box-shadow:var(--shadow-md);}
+.btn:active{transform:translateY(0);}
+.btn-primary{background:var(--accent);color:#fff;border-color:var(--accent);}
+.btn-green{background:var(--green);color:#fff;border-color:var(--green);}
+.btn-outline{background:var(--surface);color:var(--muted);border-color:var(--border2);}
+.btn-outline:hover{border-color:var(--accent);color:var(--accent);}
+.btn-ghost{background:transparent;color:var(--muted);border-color:transparent;}
+.btn-ghost:hover{background:var(--surface2);color:var(--text);}
+.btn-red{background:var(--red);color:#fff;border-color:var(--red);}
+.btn-purple{background:var(--purple);color:#fff;border-color:var(--purple);}
+.btn-artist{background:var(--artist);color:#fff;border-color:var(--artist);}
+.btn-owner{background:var(--owner);color:#fff;border-color:var(--owner);}
+.btn-teal{background:var(--teal);color:#fff;border-color:var(--teal);}
+.btn-sm{padding:5px 11px;font-size:12px;}
+.btn-xs{padding:3px 8px;font-size:11px;border-radius:7px;}
+.btn-archive{background:var(--surface2);color:var(--muted);border-color:var(--border2);}
+.btn-archive:hover{background:var(--yellow-l);color:var(--yellow);border-color:var(--yellow);}
+.full-btn{width:100%;justify-content:center;padding:12px;font-size:14px;}
+
+/* CARDS */
+.card{background:var(--surface);border:1.5px solid var(--border);border-radius:var(--r);overflow:hidden;box-shadow:var(--shadow);margin-bottom:18px;}
+.card-hdr{padding:14px 18px;border-bottom:1.5px solid var(--border);display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;}
+.card-hdr h3{font-size:12px;font-weight:600;text-transform:uppercase;letter-spacing:.07em;color:var(--muted);}
+.card-body{padding:18px;}
+
+/* KPI */
+.kpis{display:grid;gap:12px;margin-bottom:20px;}
+.k4{grid-template-columns:repeat(4,1fr);}.k3{grid-template-columns:repeat(3,1fr);}.k2{grid-template-columns:repeat(2,1fr);}
+.kpi{background:var(--surface);border:1.5px solid var(--border);border-radius:var(--r);padding:15px 17px;box-shadow:var(--shadow);position:relative;overflow:hidden;}
+.kpi::after{content:'';position:absolute;bottom:0;left:0;right:0;height:3px;border-radius:0 0 var(--r) var(--r);}
+.kpi.ka::after{background:var(--accent);}.kpi.kg::after{background:var(--green);}.kpi.kp::after{background:var(--pink);}.kpi.kb::after{background:var(--blue);}.kpi.ky::after{background:var(--yellow);}.kpi.kr::after{background:var(--red);}.kpi.kow::after{background:var(--owner);}.kpi.kart::after{background:var(--artist);}.kpi.kt::after{background:var(--teal);}
+.kpi-lbl{font-size:11px;font-weight:600;color:var(--muted);text-transform:uppercase;letter-spacing:.07em;margin-bottom:6px;}
+.kpi-val{font-family:'Almendra',serif;font-size:30px;line-height:1;margin-bottom:4px;}
+.kpi-sub{font-size:11px;color:var(--muted);}
+.kpi.ka .kpi-val{color:var(--accent);}.kpi.kg .kpi-val{color:var(--green);}.kpi.kp .kpi-val{color:var(--pink);}.kpi.kb .kpi-val{color:var(--blue);}.kpi.ky .kpi-val{color:var(--yellow);}.kpi.kr .kpi-val{color:var(--red);}.kpi.kow .kpi-val{color:var(--owner);}.kpi.kart .kpi-val{color:var(--artist);}.kpi.kt .kpi-val{color:var(--teal);}
+
+/* TABLE */
+.tbl{width:100%;border-collapse:collapse;font-size:12px;}
+.tbl th{text-align:left;padding:8px 11px;font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.06em;color:var(--muted);border-bottom:1.5px solid var(--border);background:var(--surface);position:sticky;top:0;white-space:nowrap;}
+.tbl td{padding:8px 11px;border-bottom:1px solid var(--border);vertical-align:middle;}
+.tbl tr:last-child td{border-bottom:none;}
+.tbl tr:hover td{background:var(--surface2);}
+.tbl-wrap{max-height:400px;overflow-y:auto;}
+.tbl-wrap::-webkit-scrollbar{width:4px;}
+.tbl-wrap::-webkit-scrollbar-thumb{background:var(--border2);border-radius:2px;}
+
+/* PILLS */
+.pill{display:inline-flex;align-items:center;gap:4px;font-size:11px;font-weight:600;padding:2px 8px;border-radius:20px;white-space:nowrap;}
+.pp{background:var(--surface2);color:var(--muted);border:1px solid var(--border2);}
+.pc{background:var(--blue-l);color:var(--blue);}
+.ppkg{background:var(--pink-l);color:var(--pink);}
+.psh{background:var(--yellow-l);color:var(--yellow);}
+.ps{background:var(--accent-l);color:var(--accent);}
+.pd{background:var(--green-l);color:var(--green);}
+.pcan{background:var(--red-l);color:var(--red);}
+.part{background:var(--artist-l);color:var(--artist);}
+.badge{font-size:10px;font-weight:600;padding:2px 8px;border-radius:10px;}
+
+/* GO CARD */
+.go-card{background:var(--surface);border:1.5px solid var(--border);border-radius:var(--r);padding:17px 19px;margin-bottom:12px;box-shadow:var(--shadow);display:grid;grid-template-columns:1fr auto;gap:13px;align-items:center;transition:box-shadow .15s,border-color .15s;}
+.go-card:hover{box-shadow:var(--shadow-md);border-color:var(--border2);}
+.go-card.archived{opacity:.55;background:var(--surface2);}
+.go-card.shared-in{border-left:3px solid var(--purple);}
+.go-title{font-family:'Almendra',serif;font-size:17px;margin-bottom:4px;}
+.go-meta{font-size:12px;color:var(--muted);display:flex;gap:12px;flex-wrap:wrap;}
+.go-actions{display:flex;gap:6px;align-items:center;flex-shrink:0;flex-wrap:wrap;justify-content:flex-end;}
+.prog{height:5px;background:var(--surface2);border-radius:3px;overflow:hidden;margin-top:7px;max-width:240px;}
+.prog-fill{height:100%;border-radius:3px;}
+
+/* ARTIST PARTNER CARD */
+.artist-card{background:var(--surface);border:1.5px solid var(--border);border-radius:var(--r);padding:18px 20px;margin-bottom:12px;box-shadow:var(--shadow);display:grid;grid-template-columns:56px 1fr auto;gap:14px;align-items:center;transition:box-shadow .15s,border-color .15s;cursor:pointer;}
+.artist-card:hover{box-shadow:var(--shadow-md);border-color:var(--accent);}
+.artist-avatar{width:52px;height:52px;border-radius:50%;background:linear-gradient(135deg,var(--artist-l),var(--pink-l));display:flex;align-items:center;justify-content:center;font-size:20px;border:2px solid var(--artist-l);overflow:hidden;flex-shrink:0;}
+.artist-avatar img{width:100%;height:100%;object-fit:cover;}
+.artist-name{font-family:'Almendra',serif;font-size:17px;margin-bottom:3px;}
+.artist-meta{font-size:12px;color:var(--muted);display:flex;gap:10px;flex-wrap:wrap;}
+.artist-tags{display:flex;gap:5px;flex-wrap:wrap;margin-top:6px;}
+.tag{display:inline-flex;align-items:center;font-size:11px;font-weight:500;padding:2px 9px;border-radius:20px;border:1px solid;}
+.tag-fandom{background:var(--blue-l);color:var(--blue);border-color:var(--blue-l);}
+.tag-product{background:var(--pink-l);color:var(--pink);border-color:var(--pink-l);}
+.tag-region{background:var(--green-l);color:var(--green);border-color:var(--green-l);}
+.tag-pending{background:var(--yellow-l);color:var(--yellow);border-color:var(--yellow-l);}
+.artist-actions{display:flex;gap:6px;flex-direction:column;align-items:flex-end;}
+
+/* FILTER BAR */
+.filter-bar{display:flex;gap:9px;padding:11px 17px;border-bottom:1.5px solid var(--border);background:var(--surface2);flex-wrap:wrap;align-items:center;}
+
+/* TEMPLATE PREVIEW */
+.template-card{background:var(--artist-l);border:1.5px solid var(--artist);border-radius:var(--r);padding:16px 18px;margin-bottom:14px;}
+.template-item{display:flex;align-items:center;gap:10px;padding:8px 10px;background:var(--surface);border:1px solid var(--border);border-radius:8px;margin-bottom:7px;}
+.template-img{width:38px;height:38px;border-radius:6px;object-fit:cover;background:var(--surface2);display:flex;align-items:center;justify-content:center;font-size:15px;overflow:hidden;flex-shrink:0;}
+.template-img img{width:100%;height:100%;object-fit:cover;}
+
+/* ITEM BUILDER */
+.item-row{display:grid;grid-template-columns:66px 1fr 1fr auto;gap:8px;align-items:center;background:var(--surface2);border:1.5px solid var(--border);border-radius:9px;padding:9px 12px;margin-bottom:8px;}
+.item-thumb{width:56px;height:56px;border-radius:7px;background:var(--surface3);display:flex;align-items:center;justify-content:center;color:var(--muted2);font-size:18px;overflow:hidden;cursor:pointer;position:relative;border:1.5px solid var(--border);}
+.item-thumb img{width:100%;height:100%;object-fit:cover;}
+.item-thumb-ov{position:absolute;inset:0;background:rgba(0,0,0,.3);display:flex;align-items:center;justify-content:center;opacity:0;transition:opacity .15s;font-size:12px;}
+.item-thumb:hover .item-thumb-ov{opacity:1;}
+.remove-item{width:24px;height:24px;border-radius:50%;background:var(--red-l);color:var(--red);border:none;cursor:pointer;font-size:12px;display:flex;align-items:center;justify-content:center;flex-shrink:0;}
+.remove-item:hover{background:var(--red);color:#fff;}
+
+/* CUSTOMER FORM */
+.form-hero{background:var(--surface2);border-bottom:1.5px solid var(--border);padding:30px 28px 22px;}
+.form-hero-title{font-family:'Almendra',serif;font-size:27px;margin-bottom:6px;}
+.form-section-title{font-family:'Almendra',serif;font-size:16px;margin-bottom:13px;display:flex;align-items:center;gap:7px;}
+.form-section-title::before{content:'';display:block;width:3px;height:17px;background:var(--accent);border-radius:2px;}
+.cart-row{display:grid;grid-template-columns:46px 1fr 90px 75px;gap:9px;align-items:center;background:var(--surface);border:1.5px solid var(--border);border-radius:9px;padding:8px 12px;margin-bottom:8px;}
+.cart-img{width:38px;height:38px;border-radius:6px;object-fit:cover;background:var(--surface2);display:flex;align-items:center;justify-content:center;font-size:15px;overflow:hidden;}
+.cart-img img{width:100%;height:100%;object-fit:cover;}
+.qty-inp{width:52px;border:1.5px solid var(--border);border-radius:6px;padding:5px 7px;font-size:13px;text-align:center;outline:none;font-family:'DM Sans',sans-serif;}
+.qty-inp:focus{border-color:var(--accent);}
+.total-bar{background:var(--accent);color:#fff;border-radius:var(--r);padding:13px 17px;display:flex;justify-content:space-between;align-items:center;margin-top:13px;}
+.pay-zone{border:2px dashed var(--border2);border-radius:var(--r);padding:24px;text-align:center;cursor:pointer;transition:all .2s;background:var(--surface2);}
+.pay-zone:hover,.pay-zone.drag{border-color:var(--accent);background:var(--accent-ll);}
+.pay-zone.has-img{border-style:solid;border-color:var(--green);}
+.pay-preview{max-width:100%;max-height:180px;border-radius:9px;margin-top:9px;box-shadow:var(--shadow-md);}
+.required-star{color:var(--red);}
+.err-msg{font-size:12px;color:var(--red);margin-top:4px;display:none;}
+.field-invalid .inp,.field-invalid .sel{border-color:var(--red);}
+.field-invalid .err-msg,.field-invalid .pay-err-msg{display:block;}
+.field-invalid .pay-zone{border-color:var(--red);}
+.fr2{display:grid;grid-template-columns:1fr 1fr;gap:11px;}
+.fr3{display:grid;grid-template-columns:1fr 1fr 1fr;gap:11px;}
+
+/* STATUS SELECT */
+.status-sel{appearance:none;border:none;font-size:11px;font-weight:600;cursor:pointer;outline:none;font-family:'DM Sans',sans-serif;border-radius:20px;padding:3px 20px 3px 8px;background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6'%3E%3Cpath d='M1 1l4 4 4-4' stroke='%238a7d6e' stroke-width='1.5' fill='none'/%3E%3C/svg%3E");background-repeat:no-repeat;background-position:right 5px center;min-width:115px;}
+
+/* SHARE / PERM */
+.perm-grid{display:grid;grid-template-columns:1fr 1fr;gap:7px;margin:9px 0;}
+.perm-opt{border:1.5px solid var(--border);border-radius:9px;padding:10px 12px;cursor:pointer;transition:all .15s;}
+.perm-opt:hover{border-color:var(--border2);}
+.perm-opt.sel{border-color:var(--accent);background:var(--accent-ll);}
+.perm-opt .pn{font-size:13px;font-weight:600;margin-bottom:2px;}
+.perm-opt .pd{font-size:11px;color:var(--muted);}
+
+/* ARTIST DASHBOARD */
+.go-stat-mini{background:var(--surface);border:1.5px solid var(--border);border-radius:9px;padding:13px 15px;display:flex;align-items:center;gap:10px;}
+.gsm-icon{font-size:22px;}
+.gsm-val{font-family:'Almendra',serif;font-size:24px;line-height:1;}
+.gsm-lbl{font-size:11px;color:var(--muted);}
+
+/* ORDER TIMELINE */
+.order-card{background:var(--surface);border:1.5px solid var(--border);border-radius:var(--r);padding:15px 17px;margin-bottom:11px;box-shadow:var(--shadow);}
+.order-card-title{font-family:'Almendra',serif;font-size:15px;margin-bottom:4px;}
+.tl{display:flex;overflow-x:auto;margin-top:11px;}
+.tl-step{flex:1;min-width:72px;text-align:center;position:relative;}
+.tl-step::before{content:'';position:absolute;top:10px;left:50%;right:-50%;height:2px;background:var(--border);z-index:0;}
+.tl-step:last-child::before{display:none;}
+.tl-dot{width:20px;height:20px;border-radius:50%;border:2px solid var(--border);background:var(--surface);margin:0 auto 4px;position:relative;z-index:1;display:flex;align-items:center;justify-content:center;font-size:8px;}
+.tl-step.done .tl-dot{background:var(--green);border-color:var(--green);color:#fff;}
+.tl-step.current .tl-dot{background:var(--accent);border-color:var(--accent);color:#fff;}
+.tl-label{font-size:9px;color:var(--muted);font-weight:500;}
+
+/* MODAL */
+.modal-bg{position:fixed;inset:0;background:rgba(42,33,24,.5);z-index:500;display:flex;align-items:center;justify-content:center;opacity:0;pointer-events:none;transition:opacity .2s;padding:18px;}
+.modal-bg.open{opacity:1;pointer-events:all;}
+.modal{background:var(--surface);border-radius:18px;padding:24px 28px;max-width:520px;width:100%;box-shadow:var(--shadow-lg);transform:scale(.95);transition:transform .2s;max-height:90vh;overflow-y:auto;}
+.modal-bg.open .modal{transform:scale(1);}
+.modal h2{font-family:'Almendra',serif;font-size:20px;margin-bottom:6px;}
+.modal p{font-size:13px;color:var(--muted);line-height:1.6;margin-bottom:16px;}
+.modal-footer{display:flex;justify-content:flex-end;gap:8px;margin-top:18px;}
+.share-box{background:var(--accent-ll);border:1.5px dashed var(--accent);border-radius:var(--r);padding:14px 17px;display:flex;align-items:center;gap:11px;margin-bottom:14px;}
+.share-url{flex:1;font-family:'DM Mono',monospace;font-size:12px;color:var(--accent);word-break:break-all;line-height:1.5;}
+
+/* TOAST */
+.toast{position:fixed;bottom:21px;right:21px;background:var(--surface);color:var(--text);border:1.5px solid var(--accent);padding:10px 18px;border-radius:10px;font-size:13px;display:flex;align-items:center;gap:9px;box-shadow:var(--shadow-lg);transform:translateY(80px);opacity:0;transition:all .3s cubic-bezier(.34,1.56,.64,1);z-index:999;pointer-events:none;}
+.toast.show{transform:translateY(0);opacity:1;}
+.toast-icon{font-size:15px;flex-shrink:0;}
+.toast-msg{font-weight:500;}
+
+/* ALERTS */
+.alert{border-radius:9px;padding:11px 15px;font-size:13px;line-height:1.6;margin-bottom:13px;}
+.alert-y{background:var(--yellow-l);border:1.5px solid var(--yellow);color:#7a5c0e;}
+.alert-g{background:var(--green-l);border:1.5px solid var(--green);color:#3d6640;}
+.alert-r{background:var(--red-l);border:1.5px solid var(--red);color:#7a1f1a;}
+.alert-art{background:var(--artist-l);border:1.5px solid var(--artist);color:var(--artist);}
+
+/* MISC */
+.mono{font-family:'DM Mono',monospace;}
+.muted{color:var(--muted);}
+.cb{width:14px;height:14px;accent-color:var(--accent);cursor:pointer;}
+.divider{border:none;border-top:1.5px solid var(--border);margin:16px 0;}
+.pay-thumb{width:68px;height:68px;border-radius:7px;object-fit:cover;border:1.5px solid var(--border);cursor:pointer;}
+.review-img{max-width:100%;max-height:200px;border-radius:9px;margin-top:7px;}
+.batch-bar{display:none;align-items:center;gap:9px;padding:9px 17px;background:var(--accent-ll);border-bottom:1.5px solid var(--border);flex-wrap:wrap;}
+.batch-bar.on{display:flex;}
+.two-col{display:grid;grid-template-columns:1fr 1fr;gap:16px;}
+
+/* ── COLLECTION ── */
+.coll-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(210px,1fr));gap:15px;margin-top:4px;}
+.coll-card{background:var(--surface);border:1.5px solid var(--border);border-radius:var(--r);overflow:hidden;box-shadow:var(--shadow);transition:box-shadow .15s,border-color .15s;position:relative;}
+.coll-card:hover{box-shadow:var(--shadow-md);border-color:var(--border2);}
+.coll-card.private-card{border-style:dashed;opacity:.8;}
+.coll-img{width:100%;aspect-ratio:1;object-fit:cover;background:var(--surface2);display:flex;align-items:center;justify-content:center;font-size:36px;color:var(--muted2);overflow:hidden;}
+.coll-img img{width:100%;height:100%;object-fit:cover;}
+.coll-body{padding:11px 13px;}
+.coll-name{font-weight:600;font-size:13px;margin-bottom:3px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+.coll-sub{font-size:11px;color:var(--muted);line-height:1.5;}
+.coll-badges{display:flex;gap:4px;flex-wrap:wrap;margin-top:6px;}
+.cb-forsale{background:var(--green-l);color:var(--green);font-size:10px;font-weight:600;padding:2px 7px;border-radius:10px;}
+.cb-sold{background:var(--red-l);color:var(--red);font-size:10px;font-weight:600;padding:2px 7px;border-radius:10px;}
+.cb-private{background:var(--surface2);color:var(--muted);border:1px solid var(--border2);font-size:10px;font-weight:600;padding:2px 7px;border-radius:10px;}
+.cb-go{background:var(--accent-l);color:var(--accent);font-size:10px;font-weight:600;padding:2px 7px;border-radius:10px;}
+.priv-toggle{position:absolute;top:7px;right:7px;background:rgba(0,0,0,.45);color:#fff;border:none;border-radius:20px;padding:2px 8px;font-size:10px;font-weight:600;cursor:pointer;transition:background .15s;z-index:2;}
+.priv-toggle:hover{background:rgba(0,0,0,.65);}
+
+/* ── MARKETPLACE ── */
+.market-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(230px,1fr));gap:17px;}
+.market-card{background:var(--surface);border:1.5px solid var(--border);border-radius:var(--r);overflow:hidden;box-shadow:var(--shadow);transition:all .15s;cursor:pointer;}
+.market-card:hover{box-shadow:var(--shadow-md);border-color:var(--accent);transform:translateY(-2px);}
+.market-img{width:100%;aspect-ratio:1;background:var(--surface2);display:flex;align-items:center;justify-content:center;font-size:40px;color:var(--muted2);overflow:hidden;}
+.market-img img{width:100%;height:100%;object-fit:cover;}
+.market-body{padding:13px 14px;}
+.market-name{font-family:'Almendra',serif;font-size:15px;margin-bottom:3px;}
+.market-price{font-family:'DM Mono',monospace;font-size:17px;font-weight:600;color:var(--green);margin-bottom:5px;}
+.market-seller{font-size:12px;color:var(--muted);}
+.market-tags{display:flex;gap:4px;flex-wrap:wrap;margin-top:7px;}
+
+/* ── MESSAGES ── */
+.msg-list{display:flex;flex-direction:column;gap:9px;max-height:340px;overflow-y:auto;padding:4px 2px;}
+.msg-list::-webkit-scrollbar{width:4px;}
+.msg-list::-webkit-scrollbar-thumb{background:var(--border2);border-radius:2px;}
+.msg-out{background:var(--accent);color:#fff;align-self:flex-end;border-bottom-right-radius:4px;padding:9px 12px;border-radius:12px;max-width:82%;font-size:13px;line-height:1.5;}
+.msg-in{background:var(--surface2);color:var(--text);align-self:flex-start;border-bottom-left-radius:4px;padding:9px 12px;border-radius:12px;max-width:82%;font-size:13px;line-height:1.5;}
+.msg-meta{font-size:10px;opacity:.65;margin-top:2px;}
+.msg-inp-row{display:flex;gap:7px;margin-top:10px;}
+.msg-inp{flex:1;border:1.5px solid var(--border);border-radius:9px;padding:8px 11px;font-size:13px;font-family:'DM Sans',sans-serif;outline:none;}
+.msg-inp:focus{border-color:var(--accent);}
+.inbox-row{display:flex;align-items:center;gap:11px;padding:11px 14px;border-bottom:1px solid var(--border);cursor:pointer;transition:background .12s;}
+.inbox-row:hover{background:var(--surface2);}
+.inbox-row.unread{background:var(--accent-ll);}
+.inbox-av{width:32px;height:32px;border-radius:50%;background:var(--accent-l);display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:700;color:var(--accent);flex-shrink:0;}
+.unread-dot{width:7px;height:7px;border-radius:50%;background:var(--accent);flex-shrink:0;margin-left:auto;}
+</style>
+</head>
+<body>
+
+<!-- ══ AUTH ═══════════════════════════════════════════════ -->
+<div id="auth-screen" class="auth-wrap">
+  <div class="auth-card">
+    <div class="auth-logo">
+      <div style="text-align:center;">
+        <div style="font-family:'Almendra',serif;font-size:30px;font-weight:700;color:var(--text);letter-spacing:.02em;"><span style="color:var(--accent);font-size:20px;">✦</span> Lamp<em style="color:var(--accent);font-style:italic;">lit</em> <span style="color:var(--accent);font-size:20px;">✦</span></div>
+        <div style="font-size:11px;font-style:italic;color:var(--muted);font-family:'DM Sans',sans-serif;font-weight:400;margin-top:5px;">A world lit by the artists we love</div>
+      </div>
+    </div>
+    <div class="auth-tabs">
+      <div class="auth-tab active" onclick="authTab('login')">Sign In</div>
+      <div class="auth-tab" onclick="authTab('register')">Create Account</div>
+    </div>
+    <!-- LOGIN -->
+    <div class="auth-form active" id="auth-login">
+      <div class="auth-title">Welcome back</div>
+      <div class="auth-sub">Sign in to manage LampGOs, track purchases, or manage your artist profile.</div>
+      <div class="field"><label class="lbl">Username or Email</label><input class="inp" id="l-ident" placeholder="Username or email"></div>
+      <div class="field"><label class="lbl">Password</label><input class="inp" type="password" id="l-pass" placeholder="Password" onkeydown="if(event.key==='Enter')doLogin()"></div>
+      <div class="alert alert-r" id="login-err" style="display:none;"></div>
+      <button class="btn btn-primary full-btn" style="margin-top:6px;" onclick="doLogin()">Sign In →</button>
+    </div>
+    <!-- REGISTER -->
+    <div class="auth-form" id="auth-register">
+      <div class="auth-title">Create account</div>
+      <div class="auth-sub">Choose your role below.</div>
+      <div class="role-grid">
+        <div class="role-opt selected" id="ro-customer" onclick="selRole('customer')"><div class="ri">🛍</div><div class="rn">Customer</div><div class="rd">Track orders</div></div>
+        <div class="role-opt" id="ro-host" onclick="selRole('host')"><div class="ri">📦</div><div class="rn">Host</div><div class="rd">Run GOs</div></div>
+        <div class="role-opt" id="ro-artist" onclick="selRole('artist')"><div class="ri">🎨</div><div class="rn">Artist</div><div class="rd">Partner & sell</div></div>
+        <div class="role-opt" id="ro-host-artist" onclick="selRole('host-artist')" style="grid-column:1/-1;"><div class="ri">📦🎨</div><div class="rn">Host + Artist</div><div class="rd">Run GOs & sell your own art</div></div>
+      </div>
+      <div class="fr2" style="margin-bottom:13px;">
+        <div class="field" style="margin-bottom:0;"><label class="lbl">Username</label><input class="inp" id="r-username" placeholder="your_handle"></div>
+        <div class="field" style="margin-bottom:0;"><label class="lbl">Email</label><input class="inp" type="email" id="r-email" placeholder="you@email.com"></div>
+      </div>
+      <div class="field"><label class="lbl">Password</label><input class="inp" type="password" id="r-pass" placeholder="Min. 6 characters"></div>
+      <div class="alert alert-r" id="reg-err" style="display:none;"></div>
+      <div class="pending-notice" id="pending-notice"></div>
+      <button class="btn btn-primary full-btn" style="margin-top:6px;" onclick="doRegister()">Create Account →</button>
+    </div>
+  </div>
+</div>
+
+<!-- ══ MAIN APP ════════════════════════════════════════════ -->
+<div id="app" style="display:none;">
+  <div class="hdr">
+    <div class="logo" onclick="goHome()">
+      <div style="display:flex;flex-direction:column;line-height:1;">
+        <div style="font-family:'Almendra',serif;font-size:21px;font-weight:700;color:var(--text);letter-spacing:.02em;"><span style="color:var(--accent);font-size:14px;">✦</span> Lamp<em style="color:var(--accent);font-style:italic;">lit</em> <span style="color:var(--accent);font-size:14px;">✦</span></div>
+        <div style="font-size:9px;font-style:italic;color:var(--muted);font-family:'DM Sans',sans-serif;font-weight:400;margin-top:2px;letter-spacing:.01em;">A world lit by the artists we love</div>
+      </div>
+    </div>
+    <div class="hdr-right">
+      <div id="hdr-new-go"></div>
+      <div class="user-chip" onclick="toggleMenu()">
+        <div class="user-av" id="hdr-av"></div>
+        <span id="hdr-uname" style="font-size:12px;font-weight:500;"></span>
+        <span class="role-badge" id="hdr-badge"></span>
+      </div>
+      <div class="user-menu" id="user-menu">
+        <button class="btn btn-ghost btn-sm" style="width:100%;justify-content:flex-start;" onclick="switchTab('view-profile',null);closeMenu()">👤 Profile</button>
+        <hr style="border:none;border-top:1px solid var(--border);margin:4px 0;">
+        <button class="btn btn-ghost btn-sm" style="width:100%;justify-content:flex-start;color:var(--red);" onclick="doLogout()">← Sign Out</button>
+      </div>
+    </div>
+  </div>
+  <div class="nav" id="main-nav"></div>
+  <div class="page" id="main-page">
+
+    <!-- HOST/OWNER: ALL GOs -->
+    <div id="view-all" class="view">
+      <div class="section-title">My LampGOs</div>
+      <div class="section-sub">Active LampGOs and those shared with you.</div>
+      <div id="all-list"></div>
+      <div id="all-empty" class="empty" style="display:none;padding:50px 20px;text-align:center;color:var(--muted);">
+        <div style="font-size:40px;margin-bottom:12px;opacity:.4;">✦</div>
+        <div style="font-family:'Almendra',serif;font-size:19px;color:var(--text);margin-bottom:7px;">No LampGOs yet</div>
+        <div style="font-size:13px;max-width:320px;margin:0 auto;">Create a new LampGO or browse partnered artists to use one of their pre-built templates.</div>
+      </div>
+    </div>
+
+    <!-- MANAGE ORDERS -->
+    <div id="view-orders" class="view">
+      <div id="ord-empty-st" style="text-align:center;padding:30px 20px;color:var(--muted);">
+        <div style="font-size:36px;margin-bottom:10px;">📦</div>
+        <div style="font-family:'Almendra',serif;font-size:18px;color:var(--text);margin-bottom:7px;">Select a LampGO to manage</div>
+        <div style="font-size:13px;margin-bottom:16px;">Choose one of your open LampGOs below:</div>
+        <div id="ord-go-picker" style="max-width:480px;margin:0 auto;text-align:left;"></div>
+      </div>
+      <div id="ord-content" style="display:none;">
+        <div style="display:flex;align-items:center;gap:12px;margin-bottom:19px;flex-wrap:wrap;">
+          <div><div class="section-title" id="ord-go-title">—</div><div style="font-size:12px;color:var(--muted);" id="ord-go-sub">—</div></div>
+          <div style="margin-left:auto;display:flex;gap:6px;flex-wrap:wrap;" id="ord-top-acts"></div>
+        </div>
+        <div class="kpis k4" id="ord-kpis"></div>
+        <div class="card">
+          <div class="card-hdr"><h3>Customer Orders</h3><span class="badge" style="background:var(--accent-l);color:var(--accent);" id="ord-badge">—</span></div>
+          <div class="filter-bar">
+            <select class="sel" style="width:145px;" id="of-st" onchange="filterOrders()"><option value="">All Statuses</option><option value="pending">Pending</option><option value="confirmed">Confirmed</option><option value="packaging">Packaging</option><option value="shipped-host">Shipped to Host</option><option value="shipped">Shipped</option><option value="delivered">Delivered</option><option value="cancelled">Cancelled</option></select>
+            <input class="inp" style="width:170px;" id="of-q" placeholder="Search name/username…" oninput="filterOrders()">
+            <label style="font-size:12px;display:flex;align-items:center;gap:5px;cursor:pointer;margin-left:auto;"><input type="checkbox" class="cb" id="sel-all-cb" onchange="toggleSelAll(this.checked)"> Select all</label>
+          </div>
+          <div class="batch-bar" id="batch-bar">
+            <span style="font-size:12px;font-weight:600;color:var(--accent);" id="batch-info">0 selected</span>
+            <select class="sel" style="width:145px;" id="batch-sel"><option value="">— set status —</option><option value="pending">Pending</option><option value="confirmed">Confirmed</option><option value="packaging">Packaging</option><option value="shipped-host">Shipped to Host</option><option value="shipped">Shipped</option><option value="delivered">Delivered</option><option value="cancelled">Cancelled</option></select>
+            <button class="btn btn-primary btn-sm" onclick="applyBatch()">Apply</button>
+            <button class="btn btn-outline btn-sm" onclick="clearSel()">Clear</button>
+          </div>
+          <div class="tbl-wrap"><table class="tbl"><thead><tr><th style="width:24px;"></th><th>#</th><th>Name</th><th>Username</th><th>Items</th><th>Total</th><th>Address</th><th>Status</th><th>Tracking</th><th>Payment</th><th>Notes</th></tr></thead><tbody id="ord-tbody"></tbody></table></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- OVERVIEW -->
+    <div id="view-overview" class="view">
+      <div id="ov-empty" style="text-align:center;padding:50px;color:var(--muted);"><div style="font-size:36px;margin-bottom:10px;">📊</div><div style="font-family:'Almendra',serif;font-size:18px;color:var(--text);">No LampGO selected</div></div>
+      <div id="ov-content" style="display:none;">
+        <div class="section-title" id="ov-title">—</div><div style="font-size:12px;color:var(--muted);margin-bottom:18px;" id="ov-sub">—</div>
+        <div class="kpis k4" id="ov-kpis"></div>
+        <div class="two-col"><div class="card"><div class="card-hdr"><h3>Fulfillment</h3></div><div class="card-body" id="ov-progress"></div></div><div class="card"><div class="card-hdr"><h3>Item Popularity</h3></div><div class="card-body" id="ov-items"></div></div></div>
+      </div>
+    </div>
+
+    <!-- BROWSE ARTISTS (hosts/owners) -->
+    <div id="view-browse" class="view">
+      <div class="section-title">Browse Partnered Artists</div>
+      <div class="section-sub">Find an artist you'd like to host a LampGO for, then use their pre-built template to get started instantly.</div>
+      <div class="filter-bar" style="border:1.5px solid var(--border);border-radius:var(--r);margin-bottom:16px;">
+        <label style="font-size:11px;font-weight:600;color:var(--muted);text-transform:uppercase;letter-spacing:.06em;">Filter:</label>
+        <input class="inp" style="width:170px;" id="br-search" placeholder="Search artist name…" oninput="renderBrowse()">
+        <select class="sel" style="width:140px;" id="br-fandom" onchange="renderBrowse()"><option value="">All Fandoms</option></select>
+        <select class="sel" style="width:140px;" id="br-product" onchange="renderBrowse()"><option value="">All Product Types</option></select>
+        <select class="sel" style="width:140px;" id="br-region" onchange="renderBrowse()"><option value="">All Regions</option></select>
+        <button class="btn btn-outline btn-sm" onclick="clearBrowseFilters()">Clear</button>
+      </div>
+      <div id="browse-list"></div>
+      <div id="browse-empty" style="display:none;text-align:center;padding:50px;color:var(--muted);">
+        <div style="font-size:36px;margin-bottom:10px;">🎨</div>
+        <div style="font-family:'Almendra',serif;font-size:18px;color:var(--text);margin-bottom:7px;">No artists found</div>
+        <div style="font-size:13px;">Try adjusting your filters, or check back as more artists join!</div>
+      </div>
+    </div>
+
+    <!-- CREATE/EDIT GO -->
+    <div id="view-create" class="view">
+      <div class="section-title" id="create-title">Create New LampGO</div>
+      <div class="section-sub" id="create-sub">Fill in your LampGO details and add items.</div>
+      <div id="template-banner" style="display:none;" class="alert alert-art">🎨 <strong>Using artist template.</strong> Items and details have been pre-filled from the artist's setup. You can adjust anything before saving.</div>
+      <div class="card">
+        <div class="card-hdr"><h3>Details</h3></div>
+        <div class="card-body">
+          <div class="fr2"><div class="field"><label class="lbl">GO Name <span class="required-star">*</span></label><input class="inp" id="c-name" placeholder="LampGO name"></div><div class="field"><label class="lbl">Fandom / IP</label><input class="inp" id="c-fandom" placeholder="e.g. JJBA, Genshin, BTS"></div></div>
+          <div class="field"><label class="lbl">Description</label><textarea class="textarea inp" id="c-desc" placeholder="Tell buyers about this GO…"></textarea></div>
+          <div class="fr3"><div class="field"><label class="lbl">Payment Info</label><input class="inp" id="c-pay-info" placeholder="@yourvenmo…"></div><div class="field"><label class="lbl">Deadline</label><input class="inp" type="date" id="c-deadline"></div><div class="field"><label class="lbl">Max Slots (0=∞)</label><input class="inp" type="number" id="c-slots" value="0" min="0"></div></div>
+          <div class="field" id="artist-link-field" style="display:none;"><label class="lbl">Linked Artist</label><input class="inp" id="c-artist-id" readonly style="color:var(--artist);background:var(--artist-l);"></div>
+          <div style="background:var(--surface2);border:1.5px solid var(--border);border-radius:var(--r);padding:16px 18px;margin-top:4px;">
+            <div class="lbl" style="margin-bottom:10px;">🔔 Draft Reminder Emails <span style="font-size:11px;font-weight:400;text-transform:none;letter-spacing:0;color:var(--muted2);">— sent to buyers who saved a draft but haven't submitted</span></div>
+            <div style="display:flex;flex-direction:column;gap:8px;" id="reminder-rows">
+              <div class="reminder-row" style="display:grid;grid-template-columns:1fr auto;gap:10px;align-items:center;">
+                <div style="display:flex;align-items:center;gap:9px;">
+                  <span style="font-size:12px;color:var(--muted);white-space:nowrap;">Send reminder</span>
+                  <input class="inp" type="number" min="1" max="60" value="7" style="width:64px;" class="reminder-days">
+                  <span style="font-size:12px;color:var(--muted);white-space:nowrap;">days before closing</span>
+                </div>
+                <button class="btn btn-xs" style="color:var(--red);border:1px solid var(--red);background:transparent;" onclick="removeReminderRow(this)">✕</button>
+              </div>
+            </div>
+            <button class="btn btn-outline btn-sm" style="margin-top:10px;" onclick="addReminderRow()">＋ Add another reminder</button>
+          </div>
+        </div>
+      </div>
+      <div class="card">
+        <div class="card-hdr"><h3>Items</h3><button class="btn btn-primary btn-sm" onclick="addItem()">＋ Add Item</button></div>
+        <div class="card-body"><div id="items-builder"></div><div id="items-empty" style="text-align:center;padding:18px;color:var(--muted);font-size:13px;">No items yet.</div></div>
+      </div>
+      <div style="display:flex;gap:8px;justify-content:flex-end;margin-bottom:34px;">
+        <button class="btn btn-outline" onclick="goHome()">Cancel</button>
+        <button class="btn btn-primary" onclick="saveGO()">Save & Generate Link ✦</button>
+      </div>
+    </div>
+
+    <!-- ARCHIVE -->
+    <div id="view-archive" class="view">
+      <div class="section-title">Archive</div><div class="section-sub">Completed or archived LampGOs.</div>
+      <div id="archive-empty" style="display:none;text-align:center;padding:50px;color:var(--muted);"><div style="font-size:36px;opacity:.4;margin-bottom:10px;">🗃</div><div style="font-family:'Almendra',serif;font-size:18px;color:var(--text);">Archive is empty</div></div>
+      <div id="archive-list"></div>
+    </div>
+
+    <!-- ARTIST DASHBOARD -->
+    <div id="view-artist-dash" class="view">
+      <div class="section-title">Artist Dashboard</div>
+      <div class="section-sub">Track LampGOs running your art and manage your partner profile & template.</div>
+      <div id="artist-dash-content"></div>
+    </div>
+
+    <!-- ARTIST PROFILE SETUP -->
+    <div id="view-artist-profile" class="view">
+      <div class="section-title">Artist Partner Profile</div>
+      <div class="section-sub">Set up your profile so hosts can find you and use your LampGO template.</div>
+      <div id="artist-pending-banner" style="display:none;" class="alert alert-y">⏳ Your artist partnership application is pending owner approval. You can set up your profile now and it will be visible once approved.</div>
+      <div class="card">
+        <div class="card-hdr"><h3>Public Profile</h3></div>
+        <div class="card-body">
+          <div class="fr2"><div class="field"><label class="lbl">Artist / Shop Name <span class="required-star">*</span></label><input class="inp" id="ap-name" placeholder="Your artist name or shop name"></div><div class="field"><label class="lbl">Country / Region <span class="required-star">*</span></label><input class="inp" id="ap-region" placeholder="e.g. USA, South Korea, Philippines"></div></div>
+          <div class="field"><label class="lbl">Bio</label><textarea class="textarea inp" id="ap-bio" placeholder="Tell hosts about your art style and what you create…"></textarea></div>
+          <div class="fr2"><div class="field"><label class="lbl">Social / Portfolio Link</label><input class="inp" id="ap-link" placeholder="Twitter, Carrd, Instagram URL…"></div><div class="field"><label class="lbl">Contact / Email</label><input class="inp" id="ap-contact" placeholder="How hosts can reach you"></div></div>
+          <div class="fr2">
+            <div class="field"><label class="lbl">Fandoms / IPs (comma-separated)</label><input class="inp" id="ap-fandoms" placeholder="e.g. JJBA, Genshin Impact, BTS"></div>
+            <div class="field"><label class="lbl">Product Types (comma-separated)</label><input class="inp" id="ap-products" placeholder="e.g. Fanbook, Acrylic Charm, Print"></div>
+          </div>
+        </div>
+      </div>
+      <div class="card">
+        <div class="card-hdr"><h3>🎨 LampGO Template</h3><span style="font-size:12px;color:var(--muted);">Hosts will use this to create a LampGO with your art pre-filled</span></div>
+        <div class="card-body">
+          <div class="field"><label class="lbl">Template Title</label><input class="inp" id="ap-tpl-title" placeholder="e.g. AFFECTION Jayvik Fanbook LampGO"></div>
+          <div class="field"><label class="lbl">Template Description</label><textarea class="textarea inp" id="ap-tpl-desc" placeholder="Description of the GO, what's included, estimated delivery…"></textarea></div>
+          <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;">
+            <label class="lbl" style="margin-bottom:0;">Items</label>
+            <button class="btn btn-artist btn-sm" onclick="addArtistItem()">＋ Add Item</button>
+          </div>
+          <div id="artist-items-builder"></div>
+          <div id="artist-items-empty" style="text-align:center;padding:16px;color:var(--muted);font-size:13px;">No items yet — add the products you're selling.</div>
+        </div>
+      </div>
+      <div style="display:flex;gap:8px;justify-content:flex-end;margin-bottom:34px;">
+        <button class="btn btn-artist full-btn" style="max-width:280px;" onclick="saveArtistProfile()">Save Artist Profile ✦</button>
+      </div>
+    </div>
+
+    <!-- ADMIN -->
+    <div id="view-admin" class="view">
+      <div class="section-title">Admin Panel</div><div class="section-sub">Manage users, approvals, and all LampGOs.</div>
+      <div class="kpis k4" id="admin-kpis"></div>
+      <div class="card">
+        <div class="card-hdr"><h3>⏳ Pending Approvals</h3><span class="badge" id="pending-badge" style="background:var(--yellow-l);color:var(--yellow);">0</span></div>
+        <div class="tbl-wrap"><table class="tbl"><thead><tr><th>Username</th><th>Email</th><th>Role</th><th>Requested</th><th>Actions</th></tr></thead><tbody id="pending-tbody"></tbody></table></div>
+      </div>
+      <div class="card">
+        <div class="card-hdr"><h3>All Users</h3></div>
+        <div class="filter-bar"><input class="inp" style="max-width:220px;" id="user-search" placeholder="Search…" oninput="renderUsersTable()"></div>
+        <div class="tbl-wrap"><table class="tbl"><thead><tr><th>Username</th><th>Email</th><th>Role</th><th>Joined</th><th>Actions</th></tr></thead><tbody id="users-tbody"></tbody></table></div>
+      </div>
+      <div class="card">
+        <div class="card-hdr"><h3>All LampGOs</h3></div>
+        <div class="tbl-wrap"><table class="tbl"><thead><tr><th>GO Name</th><th>Host</th><th>Artist</th><th>Orders</th><th>Status</th><th>Created</th><th></th></tr></thead><tbody id="admin-gos-tbody"></tbody></table></div>
+      </div>
+    </div>
+
+    <!-- CUSTOMER DASHBOARD -->
+    <div id="view-customer" class="view">
+      <div class="section-title">My Orders</div><div class="section-sub">All LampGOs you've placed, with live status tracking.</div>
+      <div id="cust-orders-list"></div>
+      <div id="cust-empty" style="display:none;text-align:center;padding:50px;color:var(--muted);"><div style="font-size:36px;opacity:.4;margin-bottom:10px;">🛍</div><div style="font-family:'Almendra',serif;font-size:18px;color:var(--text);">No orders yet</div></div>
+    </div>
+
+    <!-- PROFILE -->
+    <div id="view-profile" class="view">
+      <div class="section-title">Profile</div>
+      <div class="card" style="max-width:460px;margin-bottom:20px;"><div class="card-body">
+        <div class="field"><label class="lbl">Username</label><input class="inp" id="p-username"></div>
+        <div class="field"><label class="lbl">Email</label><input class="inp" type="email" id="p-email"></div>
+        <div class="divider"></div>
+        <div class="field"><label class="lbl">New Password</label><input class="inp" type="password" id="p-pass" placeholder="Leave blank to keep current"></div>
+        <div class="alert alert-r" id="prof-err" style="display:none;"></div>
+        <div class="alert alert-g" id="prof-ok" style="display:none;"></div>
+        <button class="btn btn-primary" onclick="saveProfile()">Save Changes</button>
+      </div></div>
+
+      <!-- THEME PICKER -->
+      <div class="section-title" style="font-size:18px;">🪔 Appearance</div>
+      <div style="font-size:13px;color:var(--muted);margin-bottom:18px;font-style:italic;">Choose your theme and mode — your selection is saved automatically.</div>
+
+      <!-- Mode toggle -->
+      <div style="display:flex;gap:10px;margin-bottom:22px;max-width:320px;">
+        <button id="tp-mode-dark" onclick="setAppMode('dark')" class="btn" style="flex:1;justify-content:center;">🌙 Dark</button>
+        <button id="tp-mode-light" onclick="setAppMode('light')" class="btn" style="flex:1;justify-content:center;">☀️ Light</button>
+      </div>
+
+      <!-- Theme grid -->
+      <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:12px;max-width:780px;margin-bottom:24px;" id="tp-grid"></div>
+    </div>
+
+    <!-- COLLECTION -->
+    <div id="view-collection" class="view">
+      <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:10px;margin-bottom:6px;">
+        <div><div class="section-title">My Collection</div><div class="section-sub">Everything you own from LampGOs and beyond. Private by default.</div></div>
+        <div style="display:flex;gap:8px;">
+          <button class="btn btn-outline btn-sm" onclick="switchTab('view-marketplace',null)">♻️ Recycle Center</button>
+          <button class="btn btn-primary btn-sm" onclick="openAddCollItem()">＋ Add Item</button>
+        </div>
+      </div>
+      <!-- filter bar -->
+      <div style="display:flex;gap:9px;flex-wrap:wrap;align-items:center;margin-bottom:16px;">
+        <input class="inp" style="max-width:190px;" id="coll-search" placeholder="Search items…" oninput="renderCollection()">
+        <select class="sel" style="width:140px;" id="coll-fandom-f" onchange="renderCollection()"><option value="">All Fandoms</option></select>
+        <select class="sel" style="width:140px;" id="coll-artist-f" onchange="renderCollection()"><option value="">All Artists</option></select>
+        <select class="sel" style="width:140px;" id="coll-type-f" onchange="renderCollection()"><option value="">All Types</option></select>
+        <select class="sel" style="width:130px;" id="coll-status-f" onchange="renderCollection()">
+          <option value="">All Items</option>
+          <option value="have">Still Have</option>
+          <option value="sold">Sold</option>
+          <option value="forsale">For Sale</option>
+        </select>
+        <label style="font-size:12px;display:flex;align-items:center;gap:5px;cursor:pointer;margin-left:auto;">
+          <input type="checkbox" class="cb" id="coll-show-private" onchange="renderCollection()"> Show private items
+        </label>
+      </div>
+      <div id="coll-grid" class="coll-grid"></div>
+      <div id="coll-empty" style="display:none;text-align:center;padding:50px;color:var(--muted);">
+        <div style="font-size:40px;opacity:.4;margin-bottom:12px;">✨</div>
+        <div style="font-family:'Almendra',serif;font-size:18px;color:var(--text);margin-bottom:7px;">Your collection is empty</div>
+        <div style="font-size:13px;">Add items manually or they'll auto-populate from your completed LampGOs.</div>
+      </div>
+    </div>
+
+    <!-- MARKETPLACE -->
+    <div id="view-marketplace" class="view">
+      <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:10px;margin-bottom:6px;">
+        <div><div class="section-title">Recycle Center</div><div class="section-sub">Browse items for sale from the community.</div></div>
+        <button class="btn btn-outline btn-sm" onclick="switchTab('view-messages',null)">💬 Messages <span id="msg-unread-badge" style="display:none;background:var(--accent);color:#fff;border-radius:10px;padding:1px 6px;font-size:10px;font-weight:700;margin-left:3px;">0</span></button>
+      </div>
+      <div style="display:flex;gap:9px;flex-wrap:wrap;align-items:center;margin-bottom:16px;">
+        <input class="inp" style="max-width:190px;" id="mkt-search" placeholder="Search listings…" oninput="renderMarketplace()">
+        <select class="sel" style="width:140px;" id="mkt-fandom-f" onchange="renderMarketplace()"><option value="">All Fandoms</option></select>
+        <select class="sel" style="width:140px;" id="mkt-artist-f" onchange="renderMarketplace()"><option value="">All Artists</option></select>
+        <select class="sel" style="width:140px;" id="mkt-type-f" onchange="renderMarketplace()"><option value="">All Types</option></select>
+        <select class="sel" style="width:130px;" id="mkt-char-f" onchange="renderMarketplace()"><option value="">All Characters</option></select>
+      </div>
+      <div id="market-grid" class="market-grid"></div>
+      <div id="market-empty" style="display:none;text-align:center;padding:50px;color:var(--muted);">
+        <div style="font-size:40px;opacity:.4;margin-bottom:12px;">🛒</div>
+        <div style="font-family:'Almendra',serif;font-size:18px;color:var(--text);margin-bottom:7px;">No listings yet</div>
+        <div style="font-size:13px;">When community members list items for sale, they'll appear here.</div>
+      </div>
+    </div>
+
+    <!-- MESSAGES -->
+    <div id="view-messages" class="view">
+      <div class="section-title">Messages</div>
+      <div class="section-sub">Conversations about Recycle Center items.</div>
+      <div style="display:grid;grid-template-columns:280px 1fr;gap:16px;min-height:500px;">
+        <div class="card" style="margin-bottom:0;">
+          <div class="card-hdr"><h3>Inbox</h3></div>
+          <div id="inbox-list"><div style="text-align:center;padding:32px;color:var(--muted);font-size:13px;">No conversations yet</div></div>
+        </div>
+        <div class="card" style="margin-bottom:0;">
+          <div class="card-hdr"><h3 id="conv-title">Select a conversation</h3></div>
+          <div id="conv-body" style="padding:18px;display:flex;flex-direction:column;height:100%;">
+            <div id="conv-empty" style="flex:1;display:flex;align-items:center;justify-content:center;color:var(--muted);font-size:13px;">Select a conversation from the inbox</div>
+            <div id="conv-thread" style="display:none;flex:1;flex-direction:column;">
+              <div id="msg-list" class="msg-list" style="flex:1;"></div>
+              <div class="msg-inp-row">
+                <input class="msg-inp" id="msg-inp" placeholder="Type a message…" onkeydown="if(event.key==='Enter')sendMsg()">
+                <button class="btn btn-primary btn-sm" onclick="sendMsg()">Send</button>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+  </div><!-- /main-page -->
+</div><!-- /app -->
+
+<!-- ══ CUSTOMER ORDER FORM ════════════════════════════════ -->
+<div id="order-form-screen" style="display:none;min-height:100vh;background:var(--bg);color:var(--text);">
+  <div class="form-hero">
+    <div style="display:inline-flex;align-items:center;gap:6px;background:white;border:1.5px solid var(--border);border-radius:20px;padding:3px 12px;font-size:12px;font-weight:600;color:var(--muted);margin-bottom:11px;">✦ LampGO</div>
+    <div class="form-hero-title" id="form-title">—</div>
+    <div id="form-artist-credit" style="display:none;font-size:12px;color:var(--artist);font-weight:600;margin-bottom:6px;"></div>
+    <div style="font-size:13px;color:var(--muted);line-height:1.7;max-width:500px;" id="form-desc">—</div>
+    <div style="display:flex;gap:10px;flex-wrap:wrap;margin-top:11px;" id="form-meta"></div>
+  </div>
+  <div style="padding:26px;max-width:680px;">
+    <div id="form-main">
+      <div style="margin-bottom:26px;"><div class="form-section-title">Select Items</div><div id="form-items"></div><div class="total-bar"><span style="font-size:14px;font-weight:500;">Items Total</span><span style="font-family:'Almendra',serif;font-size:25px;" id="form-total">$0.00</span></div></div>
+      <div id="form-auth-prompt" style="display:none;" class="alert alert-y">💡 <strong>Have an account?</strong> <a onclick="showFormLogin()" style="color:var(--yellow);cursor:pointer;font-weight:600;">Sign in</a> to save this order to your dashboard.</div>
+      <div style="margin-bottom:26px;"><div class="form-section-title">Shipping Info</div>
+        <div class="fr2"><div class="field" id="ff-fn-w"><label class="lbl">First Name <span class="required-star">*</span></label><input class="inp" id="ff-fn"><div class="err-msg">Required</div></div><div class="field" id="ff-ln-w"><label class="lbl">Last Name <span class="required-star">*</span></label><input class="inp" id="ff-ln"><div class="err-msg">Required</div></div></div>
+        <div class="field" id="ff-un-w"><label class="lbl">Username <span class="required-star">*</span></label><input class="inp" id="ff-un"><div class="err-msg">Required</div></div>
+        <div class="field" id="ff-em-w"><label class="lbl">Email <span class="required-star">*</span></label><input class="inp" type="email" id="ff-em"><div class="err-msg">Required</div></div>
+        <div class="field" id="ff-a1-w"><label class="lbl">Address Line 1 <span class="required-star">*</span></label><input class="inp" id="ff-a1"><div class="err-msg">Required</div></div>
+        <div class="field"><label class="lbl">Address Line 2</label><input class="inp" id="ff-a2"></div>
+        <div class="fr3"><div class="field" id="ff-ci-w"><label class="lbl">City <span class="required-star">*</span></label><input class="inp" id="ff-ci"><div class="err-msg">Required</div></div><div class="field" id="ff-st-w"><label class="lbl">State <span class="required-star">*</span></label><input class="inp" id="ff-st"><div class="err-msg">Required</div></div><div class="field" id="ff-zp-w"><label class="lbl">ZIP <span class="required-star">*</span></label><input class="inp" id="ff-zp"><div class="err-msg">Required</div></div></div>
+        <div class="field" id="ff-co-w"><label class="lbl">Country <span class="required-star">*</span></label><input class="inp" id="ff-co" value="United States"><div class="err-msg">Required</div></div>
+      </div>
+      <div style="margin-bottom:26px;"><div class="form-section-title">Payment</div>
+        <div id="form-pay-info-box" style="background:var(--accent-ll);border:1.5px solid var(--accent);border-radius:9px;padding:12px 15px;font-size:13px;line-height:1.6;margin-bottom:15px;"></div>
+        <div class="field" id="ff-pay-w"><label class="lbl">Payment Screenshot <span class="required-star">*</span></label>
+          <div class="pay-zone" id="pay-zone" onclick="document.getElementById('pay-inp').click()" ondragover="e=>{e.preventDefault();document.getElementById('pay-zone').className='pay-zone drag'}" ondragleave="document.getElementById('pay-zone').className='pay-zone'" ondrop="payDrop(event)">
+            <input type="file" id="pay-inp" accept="image/*" style="display:none;" onchange="payFile(this)">
+            <div style="font-size:26px;margin-bottom:7px;">📸</div>
+            <div style="font-size:13px;color:var(--muted);">Click to upload or drag & drop your payment screenshot</div>
+            <img id="pay-preview" class="pay-preview" style="display:none;">
+          </div>
+          <div class="err-msg pay-err-msg" id="pay-err">Payment screenshot is required</div>
+        </div>
+        <div class="field"><label class="lbl">Notes (optional)</label><textarea class="textarea inp" id="ff-notes"></textarea></div>
+      </div>
+      <button class="btn btn-primary full-btn" onclick="submitOrder()">Submit Order ✦</button>
+      <button class="btn btn-outline full-btn" style="margin-top:10px;" onclick="saveDraft()">🔖 Save Draft & Get Reminders</button>
+      <div style="text-align:center;font-size:12px;color:var(--muted);margin-top:8px;"><span class="required-star">*</span> Required fields · Save Draft stores your progress and emails you before the LampGO closes</div>
+    </div>
+    <div id="form-success" style="display:none;text-align:center;padding:46px 18px;">
+      <div style="font-size:48px;margin-bottom:13px;">🎉</div>
+      <div style="font-family:'Almendra',serif;font-size:25px;margin-bottom:8px;">Order Submitted!</div>
+      <div style="font-size:13px;color:var(--muted);line-height:1.7;max-width:360px;margin:0 auto 20px;">Your order has been received. The host will verify your payment and update your status.</div>
+      <div id="success-summary" style="background:var(--surface2);border:1.5px solid var(--border);border-radius:var(--r);padding:17px;max-width:360px;margin:0 auto 20px;text-align:left;"></div>
+      <button class="btn btn-outline" onclick="resetForm()">Submit Another</button>
+    </div>
+  </div>
+</div>
+
+<!-- MODAL -->
+<div class="modal-bg" id="modal-bg">
+  <div class="modal">
+    <h2 id="m-title"></h2><p id="m-body"></p>
+    <div id="m-extra"></div>
+    <div class="modal-footer"><button class="btn btn-outline" onclick="closeModal()">Cancel</button><button class="btn" id="m-ok">OK</button></div>
+  </div>
+</div>
+
+<!-- TOAST -->
+<div class="toast" id="toast"><span class="toast-icon" id="t-i"></span><span class="toast-msg" id="t-m"></span></div>
+
+<script>
+// ════════════════════════════════════════════════
+//  APP STATE
+// ════════════════════════════════════════════════
+let ME=null;
+let GOS={};
+let usersCache={};
+let currentGO=null;
+let editingGO=null;
+let itemRows=[];
+let artistItemRows=[];
+let selOrders=new Set();
+let formPayData=null;
+let formGOid=null;
+let regRole='customer';
+let activeConvKey=null;
+let collectionCache={};
+let marketCache=[];
+let appTheme=localStorage.getItem('lamplit-theme')||'forest';
+let appMode=localStorage.getItem('lamplit-mode')||'dark';
+
+function hashPass(p){let h=0;for(let i=0;i<p.length;i++)h=((h<<5)-h)+p.charCodeAt(i)|0;return h.toString(36);}
+
+function genUUID(){
+  try{return genUUID();}
+  catch(e){
+    return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g,c=>{
+      const r=Math.random()*16|0;
+      return(c==='x'?r:(r&0x3|0x8)).toString(16);
+    });
+  }
+}
+function showLoading(msg){
+  msg=msg||'Loading...';
+  let el=document.getElementById('global-loader');
+  if(!el){el=document.createElement('div');el.id='global-loader';el.style.cssText='position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:9999;display:flex;align-items:center;justify-content:center;';document.body.appendChild(el);}
+  el.innerHTML='<div style="background:var(--surface);border:1.5px solid var(--border);border-radius:12px;padding:18px 28px;font-family:DM Sans,sans-serif;color:var(--text);font-size:14px;display:flex;align-items:center;gap:10px;box-shadow:var(--shadow-lg);">'+String.fromCodePoint(0x1FA94)+' '+msg+'</div>';
+}
+function hideLoading(){const el=document.getElementById('global-loader');if(el)el.remove();}
+
+// ════════════════════════════════════════════════
+//  ROUTING
+// ════════════════════════════════════════════════
+async function route(){
+  const hash=location.hash;
+  if(hash.startsWith('#go/')){
+    const gid=hash.split('/')[1];
+    document.getElementById('auth-screen').style.display='none';
+    document.getElementById('app').style.display='none';
+    document.getElementById('order-form-screen').style.display='block';
+    await showOrderForm(gid);return;
+  }
+  if(ME){
+    document.getElementById('auth-screen').style.display='none';
+    document.getElementById('order-form-screen').style.display='none';
+    document.getElementById('app').style.display='block';
+    buildNav();
+    await renderAll();
+  } else {
+    document.getElementById('auth-screen').style.display='flex';
+    document.getElementById('app').style.display='none';
+    document.getElementById('order-form-screen').style.display='none';
+  }
+}
+window.addEventListener('hashchange',()=>route());
+window.addEventListener('load',async()=>{
+  applyAppTheme(appTheme,appMode);
+  // restore 30-day session
+  try{
+    const sess=JSON.parse(localStorage.getItem('lamplit-session')||'null');
+    if(sess&&sess.exp>Date.now()&&sess.userId){
+      const{data:u}=await supa.from('users').select('*').eq('id',sess.userId).single();
+      if(u&&u.pass_hash===sess.passHash){
+        ME=normUser(u);
+        // refresh session expiry
+        localStorage.setItem('lamplit-session',JSON.stringify({userId:ME.id,passHash:sess.passHash,exp:Date.now()+30*24*60*60*1000}));
+      }
+    }
+  }catch(e){console.warn('session restore error',e);}
+  await route();
+});
+
+// ════════════════════════════════════════════════
+//  AUTH
+// ════════════════════════════════════════════════
+function authTab(t){
+  document.querySelectorAll('.auth-tab').forEach((el,i)=>el.classList.toggle('active',i===(t==='login'?0:1)));
+  document.getElementById('auth-login').classList.toggle('active',t==='login');
+  document.getElementById('auth-register').classList.toggle('active',t==='register');
+}
+function selRole(r){
+  regRole=r;
+  ['customer','host','artist','host-artist'].forEach(x=>{
+    const el=document.getElementById('ro-'+x);
+    if(el) el.classList.toggle('selected',x===r);
+  });
+  const notice=document.getElementById('pending-notice');
+  notice.style.display=(r==='host'||r==='artist'||r==='host-artist')?'block':'none';
+  if(r==='host') notice.textContent='⏳ Host accounts need owner approval before you can access the dashboard.';
+  else if(r==='artist') notice.textContent='🎨 Artist accounts need owner approval. You can set up your profile while waiting!';
+  else if(r==='host-artist') notice.textContent='📦🎨 Host+Artist accounts need owner approval for both roles. Set up your artist profile while waiting!';
+  else notice.textContent='';
+}
+async function doLogin(){
+  const ident=document.getElementById('l-ident').value.trim();
+  const pass=document.getElementById('l-pass').value;
+  const err=document.getElementById('login-err');
+  err.style.display='none';
+  if(!ident||!pass){err.textContent='Please fill in all fields.';err.style.display='block';return;}
+  showLoading('Signing in...');
+  try{
+    const{data:users}=await supa.from('users').select('*').or('username.eq.'+ident+',email.eq.'+ident);
+    const u=users&&users.find(x=>x.pass_hash===hashPass(pass));
+    if(!u){hideLoading();err.textContent='Invalid credentials.';err.style.display='block';return;}
+    if(u.role==='pending-host'){hideLoading();err.textContent='Your host account is pending owner approval.';err.style.display='block';return;}
+    ME=normUser(u);
+    // persist login for 30 days
+    localStorage.setItem('lamplit-session', JSON.stringify({userId:ME.id,passHash:ME.passHash||ME.pass_hash,exp:Date.now()+30*24*60*60*1000}));
+    hideLoading();await route();
+  }catch(e){hideLoading();err.textContent='Connection error. Please try again.';err.style.display='block';}
+}
+async function doRegister(){
+  const username=document.getElementById('r-username').value.trim();
+  const email=document.getElementById('r-email').value.trim();
+  const pass=document.getElementById('r-pass').value;
+  const err=document.getElementById('reg-err');
+  err.style.display='none';
+  if(!username||!email||!pass){err.textContent='All fields required.';err.style.display='block';return;}
+  if(!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)){err.textContent='Enter a valid email.';err.style.display='block';return;}
+  if(pass.length<6){err.textContent='Password min 6 chars.';err.style.display='block';return;}
+  showLoading('Creating account...');
+  try{
+    // Check uniqueness against Supabase
+    const{data:existing}=await supa.from('users').select('id').or(`username.eq.${username},email.eq.${email}`);
+    if(existing&&existing.length>0){hideLoading();err.textContent='Username or email already taken.';err.style.display='block';return;}
+    const roleMap={customer:'customer',host:'pending-host',artist:'pending-artist','host-artist':'pending-host-artist'};
+    const role=roleMap[regRole]||'customer';
+    const newUser={
+      id:genUUID(),username,email,
+      pass_hash:hashPass(pass),role,
+      artist_profile:(regRole==='artist'||regRole==='host-artist')?{name:'',region:'',bio:'',link:'',contact:'',fandoms:[],products:[],tplTitle:'',tplDesc:'',tplItems:[],approved:false}:null
+    };
+    const{data:created,error}=await supa.from('users').insert(newUser).select().single();
+    if(error){hideLoading();err.textContent='Error: '+error.message;err.style.display='block';return;}
+    hideLoading();
+    usersCache[created.id]=normUser(created);
+    if(role==='pending-host'){toast('✦','Account created! Waiting for approval.');return;}
+    ME=normUser(created);
+    localStorage.setItem('lamplit-session', JSON.stringify({userId:ME.id,passHash:ME.passHash||ME.pass_hash,exp:Date.now()+30*24*60*60*1000}));
+    await route();
+  }catch(e){hideLoading();err.textContent='Connection error: '+e.message;err.style.display='block';}
+}
+function doLogout(){ME=null;GOS={};collectionCache={};localStorage.removeItem('lamplit-session');closeMenu();route();}
+
+// ════════════════════════════════════════════════
+//  HEADER / NAV
+// ════════════════════════════════════════════════
+function buildNav(){
+  if(!ME) return;
+  const av=document.getElementById('hdr-av');
+  const roleBase=ME.role.replace('pending-','').replace('host-artist','host');
+  av.className='user-av av-'+roleBase;
+  av.textContent=ME.username.slice(0,2).toUpperCase();
+  document.getElementById('hdr-uname').textContent=ME.username;
+  const rb={owner:'rb-owner',host:'rb-host',customer:'rb-customer',artist:'rb-artist','pending-artist':'rb-artist','pending-host':'rb-host','host-artist':'rb-host','pending-host-artist':'rb-host'};
+  const rl={owner:'Owner',host:'Host',customer:'Customer',artist:'Artist','pending-artist':'Artist','pending-host':'Host (pending)','host-artist':'Host + Artist','pending-host-artist':'Host+Artist (pending)'};
+  const badge=document.getElementById('hdr-badge');
+  badge.className='role-badge '+(rb[ME.role]||'rb-host');
+  badge.textContent=rl[ME.role]||ME.role;
+
+  const nav=document.getElementById('main-nav');
+  const newBtn=document.getElementById('hdr-new-go');
+  const isHostArtist=ME.role==='host-artist'||ME.role==='pending-host-artist';
+  const isArtist=ME.role==='artist'||ME.role==='pending-artist'||isHostArtist;
+  const isHost=ME.role==='host'||ME.role==='owner'||isHostArtist;
+
+  if(ME.role==='customer'){
+    nav.innerHTML=`
+      <div class="tab-group-label">My Space</div>
+      <div class="tab active" onclick="switchTab('view-customer',this)">🛍 My Orders</div>
+      <div class="tab" onclick="switchTab('view-collection',this)">✨ Collection</div>
+      <div class="tab" onclick="switchTab('view-marketplace',this)">♻️ Recycle Center</div>
+      <div class="tab" onclick="switchTab('view-messages',this)">💬 Messages</div>
+      <div class="tab" onclick="switchTab('view-profile',this)">👤 Profile</div>`;
+    newBtn.innerHTML='';
+  } else if(isArtist && !isHost){
+    nav.innerHTML=`
+      <div class="tab-group-label">🎨 Artist</div>
+      <div class="tab active" onclick="switchTab('view-artist-dash',this)">Dashboard</div>
+      <div class="tab" onclick="switchTab('view-artist-profile',this)">My Profile & Template</div>
+      <div class="tab-group-label">My Space</div>
+      <div class="tab" onclick="switchTab('view-customer',this)">🛍 My Orders</div>
+      <div class="tab" onclick="switchTab('view-collection',this)">✨ Collection</div>
+      <div class="tab" onclick="switchTab('view-marketplace',this)">♻️ Recycle Center</div>
+      <div class="tab" onclick="switchTab('view-messages',this)">💬 Messages</div>
+      <div class="tab" onclick="switchTab('view-profile',this)">👤 Account</div>`;
+    newBtn.innerHTML='';
+  } else if(isHostArtist){
+    nav.innerHTML=`
+      <div class="tab-group-label">📦 Hosting</div>
+      <div class="tab active" onclick="switchTab('view-all',this)">✦ LampGOs</div>
+      <div class="tab" onclick="switchTab('view-orders',this)">📦 Manage Orders</div>
+      <div class="tab" onclick="switchTab('view-overview',this)">📊 Overview</div>
+      <div class="tab" onclick="switchTab('view-browse',this)">Browse Artists</div>
+      <div class="tab" onclick="switchTab('view-archive',this)">🗃 Archive</div>
+      <div class="tab-group-label">🎨 Artist</div>
+      <div class="tab" onclick="switchTab('view-artist-dash',this)">Dashboard</div>
+      <div class="tab" onclick="switchTab('view-artist-profile',this)">My Profile & Template</div>
+      <div class="tab-group-label">My Space</div>
+      <div class="tab" onclick="switchTab('view-customer',this)">🛍 My Orders</div>
+      <div class="tab" onclick="switchTab('view-collection',this)">✨ Collection</div>
+      <div class="tab" onclick="switchTab('view-marketplace',this)">♻️ Recycle Center</div>
+      <div class="tab" onclick="switchTab('view-messages',this)">💬 Messages</div>
+      <div class="tab" onclick="switchTab('view-profile',this)">👤 Account</div>`;
+    newBtn.innerHTML=`<button class="btn btn-primary btn-sm" onclick="startCreate()">＋ New LampGO</button>`;
+  } else {
+    nav.innerHTML=`
+      <div class="tab-group-label">📦 Hosting</div>
+      <div class="tab active" onclick="switchTab('view-all',this)">✦ LampGOs</div>
+      <div class="tab" onclick="switchTab('view-orders',this)">📦 Manage Orders</div>
+      <div class="tab" onclick="switchTab('view-overview',this)">📊 Overview</div>
+      <div class="tab" onclick="switchTab('view-browse',this)">Browse Artists</div>
+      <div class="tab" onclick="switchTab('view-archive',this)">🗃 Archive</div>
+      <div class="tab-group-label">My Space</div>
+      <div class="tab" onclick="switchTab('view-customer',this)">🛍 My Orders</div>
+      <div class="tab" onclick="switchTab('view-collection',this)">✨ Collection</div>
+      <div class="tab" onclick="switchTab('view-marketplace',this)">♻️ Recycle Center</div>
+      <div class="tab" onclick="switchTab('view-messages',this)">💬 Messages</div>
+      ${ME.role==='owner'?'<div class="tab-group-label">Admin</div><div class="tab" onclick="switchTab(\'view-admin\',this)">⚙️ Admin Panel</div>':''}
+      <div class="tab" onclick="switchTab('view-profile',this)">👤 Account</div>`;
+    newBtn.innerHTML=`<button class="btn btn-primary btn-sm" onclick="startCreate()">＋ New LampGO</button>`;
+  }
+}
+
+function switchTab(id,el){
+  document.querySelectorAll('.view').forEach(v=>v.classList.remove('active'));
+  document.querySelectorAll('.tab').forEach(t=>t.classList.remove('active'));
+  const v=document.getElementById(id);if(v)v.classList.add('active');
+  if(el)el.classList.add('active');
+  if(id==='view-admin')renderAdmin();
+  if(id==='view-overview'&&currentGO)renderOverview(currentGO);
+  if(id==='view-orders'){if(currentGO)renderOrdersView(currentGO);else renderGOPicker();}
+  if(id==='view-customer')renderCustomerDash();
+  if(id==='view-profile')loadProfile();
+  if(id==='view-browse'){populateBrowseFilters();renderBrowse();}
+  if(id==='view-artist-profile')loadArtistProfileForm();
+  if(id==='view-artist-dash')renderArtistDash();
+  if(id==='view-collection'){populateCollFilters();renderCollection();}
+  if(id==='view-marketplace'){populateMktFilters();renderMarketplace();}
+  if(id==='view-messages'){renderInbox();}
+}
+function showView(id){document.querySelectorAll('.view').forEach(v=>v.classList.remove('active'));const v=document.getElementById(id);if(v)v.classList.add('active');}
+function goHome(){if(!ME)return;if(ME.role==='customer'||ME.role==='artist'||ME.role==='pending-artist')switchTab(ME.role==='customer'?'view-customer':'view-artist-dash',document.querySelector('.tab'));else switchTab('view-all',document.querySelector('.tab'));}
+function toggleMenu(){const m=document.getElementById('user-menu');m.style.display=m.style.display==='none'?'block':'none';}
+function closeMenu(){document.getElementById('user-menu').style.display='none';}
+document.addEventListener('click',e=>{if(!e.target.closest('.hdr-right'))closeMenu();});
+
+// ════════════════════════════════════════════════
+//  PERMISSIONS
+// ════════════════════════════════════════════════
+function canEdit(go){if(!ME)return false;if(ME.role==='owner')return true;if(go.ownerId===ME.id)return true;const s=go.sharedWith&&go.sharedWith.find(x=>x.uid===ME.id);return s&&(s.perm==='full'||s.perm==='manage');}
+function canView(go){if(!ME)return false;if(ME.role==='owner')return true;if(go.ownerId===ME.id)return true;return go.sharedWith&&go.sharedWith.some(x=>x.uid===ME.id);}
+function myGOs(){return Object.values(GOS).filter(g=>!g.archived&&canView(g));}
+function getPermLabel(p){return{view:'View only',manage:'Manage statuses',full:'Full access'}[p]||p;}
+
+// ════════════════════════════════════════════════
+//  RENDER ALL
+// ════════════════════════════════════════════════
+async function renderAll(){
+  if(!ME)return;
+  showLoading('Loading...');
+  await Promise.all([loadGOs(), loadUsersIfNeeded()]);
+  hideLoading();
+  const isHostArtist=ME.role==='host-artist'||ME.role==='pending-host-artist';
+  if(ME.role==='customer'){renderCustomerDash();return;}
+  if((ME.role==='artist'||ME.role==='pending-artist')&&!isHostArtist){renderArtistDash();return;}
+  renderAllGOs();renderArchive();
+  if(currentGO&&GOS[currentGO]){renderOrdersView(currentGO);renderOverview(currentGO);}
+}
+
+// Load users cache for display purposes
+async function loadUsersIfNeeded(){
+  if(Object.keys(usersCache).length>0)return;
+  const users=await DB.getAllUsers();
+  users.forEach(u=>{usersCache[u.id]=normUser(u);});
+}
+async function loadGOs(){
+  const gos=await DB.getLampGOs();
+  GOS={};
+  for(const g of gos){
+    const orders=await DB.getOrders(g.id);
+    GOS[g.id]=normGO(g,orders);
+  }
+}
+
+// ════════════════════════════════════════════════
+//  ALL GOs
+// ════════════════════════════════════════════════
+function renderAllGOs(){
+  const gos=myGOs().sort((a,b)=>b.createdAt.localeCompare(a.createdAt));
+  document.getElementById('all-empty').style.display=gos.length?'none':'block';
+  document.getElementById('all-list').innerHTML=gos.map(g=>{
+    const isOwner=ME.role==='owner',isGOOwner=g.ownerId===ME.id;
+    const share=g.sharedWith&&g.sharedWith.find(s=>s.uid===ME.id);
+    const isSharedIn=share&&!isGOOwner&&!isOwner;
+    const total=g.orders.length,delivered=g.orders.filter(o=>o.status==='delivered').length;
+    const pct=total?Math.round(delivered/total*100):0;
+    const artistUser=g.linkedArtistId?usersCache[g.linkedArtistId]:null;
+    const artistTag=artistUser?`<span class="tag tag-fandom">🎨 ${artistUser.artistProfile?.name||artistUser.username}</span>`:'';
+    const fandomTag=g.fandom?`<span class="tag tag-fandom">${g.fandom}</span>`:'';
+    const acts=[];
+    acts.push(`<button class="btn btn-outline btn-sm" onclick="copyGOLink('${g.id}')">🔗 Link</button>`);
+    acts.push(`<button class="btn btn-outline btn-sm" onclick="openOrders('${g.id}')">Orders (${total})</button>`);
+    if(canEdit(g)){acts.push(`<button class="btn btn-outline btn-sm" onclick="editGO('${g.id}')">Edit</button>`);acts.push(`<button class="btn btn-sm btn-purple" onclick="openShareModal('${g.id}')">🤝 Share</button>`);if(g.goStatus!=='complete')acts.push(`<button class="btn btn-green btn-sm" onclick="markComplete('${g.id}')">✓ Complete</button>`);acts.push(`<button class="btn btn-archive btn-sm" onclick="archiveGO('${g.id}')">Archive</button>`);}
+    if(isGOOwner||isOwner)acts.push(`<button class="btn btn-xs" style="color:var(--red);border:1px solid var(--red);background:transparent;" onclick="deleteGO('${g.id}')">Delete</button>`);
+    return `<div class="go-card${isSharedIn?' shared-in':''}">
+      <div>
+        <div style="display:flex;align-items:center;gap:7px;flex-wrap:wrap;margin-bottom:3px;">
+          <div class="go-title">${g.name}</div>
+          ${g.goStatus==='complete'?'<span class="pill pd">✓ Complete</span>':'<span class="pill pc">● Active</span>'}
+          ${isSharedIn?`<span style="background:var(--purple-l);color:var(--purple);border-radius:6px;padding:2px 8px;font-size:11px;font-weight:600;">🤝 ${getPermLabel(share.perm)}</span>`:''}
+        </div>
+        <div class="go-meta"><span>📅 ${g.createdAt.split('T')[0]}</span>${g.deadline?`<span>⏰ ${g.deadline}</span>`:''}<span>👥 ${total} orders</span><span>✅ ${delivered} delivered</span></div>
+        <div style="display:flex;gap:5px;flex-wrap:wrap;margin-top:6px;">${fandomTag}${artistTag}</div>
+        <div class="prog"><div class="prog-fill" style="width:${pct}%;background:var(--green);"></div></div>
+      </div>
+      <div class="go-actions">${acts.join('')}</div>
+    </div>`;
+  }).join('');
+}
+
+function copyGOLink(id){const l=location.origin+location.pathname+'#go/'+id;navigator.clipboard.writeText(l).then(()=>toast('🔗','Link copied!')).catch(()=>prompt('Copy:',l));}
+function openOrders(id){currentGO=id;switchTab('view-orders',document.querySelectorAll('.tab')[1]);renderOrdersView(id);}
+
+// ════════════════════════════════════════════════
+//  BROWSE ARTISTS
+// ════════════════════════════════════════════════
+function approvedArtists(){
+  return Object.values(usersCache||{}).filter(u=>(u.role==='artist'||u.role==='host-artist')&&u.artistProfile&&u.artistProfile.approved);
+}
+function populateBrowseFilters(){
+  const artists=approvedArtists();
+  const fandoms=[...new Set(artists.flatMap(a=>a.artistProfile.fandoms||[]))].sort();
+  const products=[...new Set(artists.flatMap(a=>a.artistProfile.products||[]))].sort();
+  const regions=[...new Set(artists.map(a=>a.artistProfile.region).filter(Boolean))].sort();
+  const fSel=document.getElementById('br-fandom');
+  const prev=fSel.value;
+  fSel.innerHTML=`<option value="">All Fandoms</option>`+fandoms.map(f=>`<option value="${f}">${f}</option>`).join('');
+  if(prev)fSel.value=prev;
+  const pSel=document.getElementById('br-product');
+  const pprev=pSel.value;
+  pSel.innerHTML=`<option value="">All Product Types</option>`+products.map(p=>`<option value="${p}">${p}</option>`).join('');
+  if(pprev)pSel.value=pprev;
+  const rSel=document.getElementById('br-region');
+  const rprev=rSel.value;
+  rSel.innerHTML=`<option value="">All Regions</option>`+regions.map(r=>`<option value="${r}">${r}</option>`).join('');
+  if(rprev)rSel.value=rprev;
+}
+function clearBrowseFilters(){['br-search','br-fandom','br-product','br-region'].forEach(id=>{const el=document.getElementById(id);if(el)el.value='';});renderBrowse();}
+function renderBrowse(){
+  const q=(document.getElementById('br-search')?.value||'').toLowerCase();
+  const fandom=document.getElementById('br-fandom')?.value||'';
+  const product=document.getElementById('br-product')?.value||'';
+  const region=document.getElementById('br-region')?.value||'';
+  let artists=approvedArtists();
+  if(q)artists=artists.filter(a=>(a.artistProfile.name||a.username).toLowerCase().includes(q)||(a.artistProfile.bio||'').toLowerCase().includes(q));
+  if(fandom)artists=artists.filter(a=>(a.artistProfile.fandoms||[]).includes(fandom));
+  if(product)artists=artists.filter(a=>(a.artistProfile.products||[]).includes(product));
+  if(region)artists=artists.filter(a=>a.artistProfile.region===region);
+  document.getElementById('browse-empty').style.display=artists.length?'none':'block';
+  document.getElementById('browse-list').innerHTML=artists.map(a=>{
+    const ap=a.artistProfile;
+    const fanTags=(ap.fandoms||[]).map(f=>`<span class="tag tag-fandom">${f}</span>`).join('');
+    const prodTags=(ap.products||[]).map(p=>`<span class="tag tag-product">${p}</span>`).join('');
+    const regTag=ap.region?`<span class="tag tag-region">🌏 ${ap.region}</span>`:'';
+    const hasTemplate=ap.tplTitle&&ap.tplItems&&ap.tplItems.length>0;
+    return `<div class="artist-card" onclick="openArtistDetail('${a.id}')">
+      <div class="artist-avatar">${ap.avatarData?`<img src="${ap.avatarData}">`:'🎨'}</div>
+      <div>
+        <div class="artist-name">${ap.name||a.username}</div>
+        <div class="artist-meta">${ap.region?`<span>🌏 ${ap.region}</span>`:''} ${ap.link?`<a href="${ap.link}" target="_blank" onclick="event.stopPropagation()" style="color:var(--blue);">Portfolio ↗</a>`:''}</div>
+        <div class="artist-tags">${regTag}${fanTags}${prodTags}</div>
+        ${ap.bio?`<div style="font-size:12px;color:var(--muted);margin-top:5px;line-height:1.5;">${ap.bio.slice(0,120)}${ap.bio.length>120?'…':''}</div>`:''}
+      </div>
+      <div class="artist-actions">
+        ${hasTemplate?`<button class="btn btn-artist btn-sm" onclick="event.stopPropagation();useArtistTemplate('${a.id}')">✦ Use Template</button>`:''}
+        <button class="btn btn-outline btn-sm" onclick="event.stopPropagation();openArtistDetail('${a.id}')">View Profile</button>
+      </div>
+    </div>`;
+  }).join('');
+}
+
+function openArtistDetail(uid){
+  const a=usersCache[uid]; if(!a||!a.artistProfile) return;
+  const ap=a.artistProfile;
+  const hasTemplate=ap.tplTitle&&ap.tplItems&&ap.tplItems.length>0;
+  const itemPreviews=hasTemplate?ap.tplItems.map(it=>`
+    <div class="template-item">
+      <div class="template-img">${it.imgData?`<img src="${it.imgData}">`:'🖼'}</div>
+      <div style="flex:1;"><div style="font-weight:500;font-size:13px;">${it.name}</div><div style="font-size:12px;color:var(--muted);">$${Number(it.price).toFixed(2)}</div></div>
+    </div>`).join(''):'';
+  openModal(
+    ap.name||a.username,
+    ap.bio||'No bio provided.',
+    `<div style="display:flex;gap:7px;flex-wrap:wrap;margin-bottom:12px;">
+      ${(ap.fandoms||[]).map(f=>`<span class="tag tag-fandom">${f}</span>`).join('')}
+      ${(ap.products||[]).map(p=>`<span class="tag tag-product">${p}</span>`).join('')}
+      ${ap.region?`<span class="tag tag-region">🌏 ${ap.region}</span>`:''}
+    </div>
+    ${ap.contact?`<div style="font-size:12px;color:var(--muted);margin-bottom:10px;">📬 ${ap.contact}</div>`:''}
+    ${hasTemplate?`<div class="template-card"><div style="font-size:12px;font-weight:600;color:var(--artist);margin-bottom:8px;">✦ LampGO Template: ${ap.tplTitle}</div>${ap.tplDesc?`<div style="font-size:12px;color:var(--muted);margin-bottom:9px;line-height:1.5;">${ap.tplDesc}</div>`:''}${itemPreviews}</div>`:'<div class="alert alert-y">This artist hasn\'t set up a LampGO template yet.</div>'}`,
+    hasTemplate?'btn-artist':'btn-outline',
+    hasTemplate?'✦ Use This Template':'Close',
+    hasTemplate?()=>useArtistTemplate(uid):null
+  );
+}
+
+function useArtistTemplate(uid){
+  const a=usersCache[uid]; if(!a||!a.artistProfile) return;
+  const ap=a.artistProfile;
+  editingGO=null;
+  itemRows=ap.tplItems.map(i=>({...i,id:'it_'+Date.now()+'_'+Math.random().toString(36).slice(2,5)}));
+  document.getElementById('c-name').value=ap.tplTitle||'';
+  document.getElementById('c-fandom').value=(ap.fandoms||[]).join(', ');
+  document.getElementById('c-desc').value=ap.tplDesc||'';
+  document.getElementById('c-pay-info').value='';
+  document.getElementById('c-deadline').value='';
+  document.getElementById('c-slots').value='0';
+  document.getElementById('create-title').textContent=`New GO — ${ap.name||a.username}`;
+  document.getElementById('create-sub').textContent='Pre-filled from artist template. Adjust as needed before saving.';
+  document.getElementById('template-banner').style.display='block';
+  document.getElementById('artist-link-field').style.display='block';
+  document.getElementById('c-artist-id').value=`${ap.name||a.username} (@${a.username})`;
+  document.getElementById('c-artist-id').dataset.uid=uid;
+  renderItemsBuilder();
+  closeModal();
+  showView('view-create');
+}
+
+// ════════════════════════════════════════════════
+//  CREATE / EDIT GO
+// ════════════════════════════════════════════════
+function startCreate(){
+  editingGO=null;itemRows=[];
+  document.getElementById('c-name').value='';document.getElementById('c-fandom').value='';document.getElementById('c-desc').value='';document.getElementById('c-pay-info').value='';document.getElementById('c-deadline').value='';document.getElementById('c-slots').value='0';
+  document.getElementById('create-title').textContent='Create New LampGO';
+  document.getElementById('create-sub').textContent='Fill in your LampGO details and add items.';
+  document.getElementById('template-banner').style.display='none';
+  document.getElementById('artist-link-field').style.display='none';
+  renderItemsBuilder();showView('view-create');
+}
+function editGO(id){
+  const g=GOS[id]; if(!g) return;
+  editingGO=id;itemRows=g.items.map(i=>({...i}));
+  document.getElementById('c-name').value=g.name||'';document.getElementById('c-fandom').value=g.fandom||'';document.getElementById('c-desc').value=g.desc||'';document.getElementById('c-pay-info').value=g.paymentInfo||'';document.getElementById('c-deadline').value=g.deadline||'';document.getElementById('c-slots').value=g.maxSlots||0;
+  document.getElementById('create-title').textContent='Edit LampGO';
+  document.getElementById('create-sub').textContent='';
+  document.getElementById('template-banner').style.display='none';
+  const linkedArtist=g.linkedArtistId?usersCache[g.linkedArtistId]:null;
+  document.getElementById('artist-link-field').style.display=linkedArtist?'block':'none';
+  if(linkedArtist){document.getElementById('c-artist-id').value=`${linkedArtist.artistProfile?.name||linkedArtist.username} (@${linkedArtist.username})`;document.getElementById('c-artist-id').dataset.uid=g.linkedArtistId;}
+  renderItemsBuilder();showView('view-create');
+}
+function addItem(){itemRows.push({id:'it_'+Date.now(),name:'',price:0,imgData:''});renderItemsBuilder();}
+function removeItem(i){itemRows.splice(i,1);renderItemsBuilder();}
+function renderItemsBuilder(){
+  document.getElementById('items-empty').style.display=itemRows.length?'none':'block';
+  document.getElementById('items-builder').innerHTML=itemRows.map((it,i)=>`
+    <div class="item-row">
+      <div class="item-thumb" onclick="document.getElementById('ii-${i}').click()">
+        ${it.imgData?`<img src="${it.imgData}">`:'🖼'}
+        <div class="item-thumb-ov">📷</div>
+        <input type="file" id="ii-${i}" accept="image/*" style="display:none;" onchange="itemImgChange(${i},this,'itemRows')">
+      </div>
+      <input class="inp" value="${escH(it.name)}" placeholder="Item name *" oninput="itemRows[${i}].name=this.value">
+      <input class="inp" type="number" step="0.01" min="0" value="${it.price||''}" placeholder="Price" oninput="itemRows[${i}].price=parseFloat(this.value)||0">
+      <button class="remove-item" onclick="removeItem(${i})">✕</button>
+    </div>`).join('');
+}
+function itemImgChange(i,inp,arr){
+  const f=inp.files[0];if(!f)return;
+  const r=new FileReader();r.onload=e=>{window[arr][i].imgData=e.target.result;arr==='itemRows'?renderItemsBuilder():renderArtistItemsBuilder();};r.readAsDataURL(f);
+}
+async function saveGO(){
+  const name=document.getElementById('c-name').value.trim();
+  if(!name){toast('✕','LampGO name required',true);return;}
+  if(!itemRows.length){toast('✕','Add at least one item',true);return;}
+  if(itemRows.find(i=>!i.name.trim())){toast('✕','All items need a name',true);return;}
+  const id=editingGO||genUUID();
+  const ex=editingGO?GOS[editingGO]:null;
+  const linkedArtistId=document.getElementById('c-artist-id').dataset.uid||null;
+  const goData={id,name,fandom:document.getElementById('c-fandom').value.trim(),desc:document.getElementById('c-desc').value.trim(),paymentInfo:document.getElementById('c-pay-info').value.trim(),deadline:document.getElementById('c-deadline').value||null,maxSlots:parseInt(document.getElementById('c-slots').value)||0,items:itemRows.map(i=>({...i})),orders:ex?ex.orders:[],goStatus:ex?ex.goStatus:'active',archived:ex?ex.archived:false,ownerId:ex?ex.ownerId:ME.id,linkedArtistId:linkedArtistId||ex?.linkedArtistId||null,sharedWith:ex?ex.sharedWith:[],createdAt:ex?ex.createdAt:new Date().toISOString(),reminderDays:getReminderDays()};
+  GOS[id]=goData;
+  DB.upsertLampGO(goData).catch(e=>console.error('saveGO error',e));
+  const link=location.origin+location.pathname+'#go/'+id;
+  openModal(editingGO?'LampGO Updated \u2713':'\u2746 LampGO Created!',editingGO?'Changes saved.':'Share this link with buyers:',
+    `<div class="share-box"><span style="font-size:18px;">🔗</span><div class="share-url">${link}</div><button class="btn btn-primary btn-sm" onclick="navigator.clipboard.writeText('${link}').then(()=>toast('🔗','Copied!'))">Copy</button></div>`,
+    'btn-outline','Close',()=>{editingGO=null;goHome();renderAll();});
+}
+
+// ════════════════════════════════════════════════
+//  ARTIST PROFILE
+// ════════════════════════════════════════════════
+function loadArtistProfileForm(){
+  if(!ME||!(ME.role==='artist'||ME.role==='pending-artist'||ME.role==='host-artist'||ME.role==='pending-host-artist')) return;
+  const ap=ME.artistProfile||{};
+  document.getElementById('ap-name').value=ap.name||'';
+  document.getElementById('ap-region').value=ap.region||'';
+  document.getElementById('ap-bio').value=ap.bio||'';
+  document.getElementById('ap-link').value=ap.link||'';
+  document.getElementById('ap-contact').value=ap.contact||'';
+  document.getElementById('ap-fandoms').value=(ap.fandoms||[]).join(', ');
+  document.getElementById('ap-products').value=(ap.products||[]).join(', ');
+  document.getElementById('ap-tpl-title').value=ap.tplTitle||'';
+  document.getElementById('ap-tpl-desc').value=ap.tplDesc||'';
+  artistItemRows=(ap.tplItems||[]).map(i=>({...i}));
+  renderArtistItemsBuilder();
+  document.getElementById('artist-pending-banner').style.display=ME.role==='pending-artist'?'block':'none';
+}
+function addArtistItem(){artistItemRows.push({id:'ait_'+Date.now(),name:'',price:0,imgData:''});renderArtistItemsBuilder();}
+function removeArtistItem(i){artistItemRows.splice(i,1);renderArtistItemsBuilder();}
+function renderArtistItemsBuilder(){
+  document.getElementById('artist-items-empty').style.display=artistItemRows.length?'none':'block';
+  document.getElementById('artist-items-builder').innerHTML=artistItemRows.map((it,i)=>`
+    <div class="item-row" style="border-color:var(--artist-l);">
+      <div class="item-thumb" onclick="document.getElementById('ai-${i}').click()">
+        ${it.imgData?`<img src="${it.imgData}">`:'🖼'}
+        <div class="item-thumb-ov">📷</div>
+        <input type="file" id="ai-${i}" accept="image/*" style="display:none;" onchange="itemImgChange(${i},this,'artistItemRows')">
+      </div>
+      <input class="inp" value="${escH(it.name)}" placeholder="Item name *" oninput="artistItemRows[${i}].name=this.value">
+      <input class="inp" type="number" step="0.01" min="0" value="${it.price||''}" placeholder="Price" oninput="artistItemRows[${i}].price=parseFloat(this.value)||0">
+      <button class="remove-item" onclick="removeArtistItem(${i})">✕</button>
+    </div>`).join('');
+}
+async function saveArtistProfile(){
+  if(!ME) return;
+  const name=document.getElementById('ap-name').value.trim();
+  const region=document.getElementById('ap-region').value.trim();
+  if(!name||!region){toast('✕','Artist name and region required',true);return;}
+  if(!ME.artistProfile) ME.artistProfile={approved:false};
+  ME.artistProfile.name=name;
+  ME.artistProfile.region=region;
+  ME.artistProfile.bio=document.getElementById('ap-bio').value.trim();
+  ME.artistProfile.link=document.getElementById('ap-link').value.trim();
+  ME.artistProfile.contact=document.getElementById('ap-contact').value.trim();
+  ME.artistProfile.fandoms=document.getElementById('ap-fandoms').value.split(',').map(s=>s.trim()).filter(Boolean);
+  ME.artistProfile.products=document.getElementById('ap-products').value.split(',').map(s=>s.trim()).filter(Boolean);
+  ME.artistProfile.tplTitle=document.getElementById('ap-tpl-title').value.trim();
+  ME.artistProfile.tplDesc=document.getElementById('ap-tpl-desc').value.trim();
+  ME.artistProfile.tplItems=artistItemRows.map(i=>({...i}));
+  usersCache[ME.id]=ME;
+  showLoading('Saving profile...');
+  try{
+    const{error}=await supa.from('users').update({
+      artist_profile: ME.artistProfile,
+      role: ME.role
+    }).eq('id',ME.id);
+    hideLoading();
+    if(error){toast('✕','Save error: '+error.message,true);return;}
+    toast('🎨','Artist profile saved!');
+    // refresh browse filters
+    populateBrowseFilters();
+  }catch(e){hideLoading();toast('✕','Connection error',true);}
+}
+
+// ════════════════════════════════════════════════
+//  ARTIST DASHBOARD
+// ════════════════════════════════════════════════
+async function renderArtistDash(){
+  if(!ME) return;
+  const ap=ME.artistProfile||{};
+  const isPending=ME.role==='pending-artist';
+  // Find all GOs linked to this artist
+  const myLinkedGOs=Object.values(GOS).filter(g=>g.linkedArtistId===ME.id&&!g.archived);
+  const totalOrders=myLinkedGOs.reduce((s,g)=>s+g.orders.length,0);
+  const totalDelivered=myLinkedGOs.reduce((s,g)=>s+g.orders.filter(o=>o.status==='delivered').length,0);
+  const totalRevenue=myLinkedGOs.reduce((s,g)=>s+g.orders.filter(o=>o.status!=='cancelled').reduce((ss,o)=>ss+o.total,0),0);
+
+  document.getElementById('artist-dash-content').innerHTML=`
+    ${isPending?`<div class="alert alert-y">⏳ Your artist account is pending approval. You can still set up your profile and template — it'll be visible to hosts once approved.</div>`:''}
+    ${!ap.name?`<div class="alert alert-art">👋 Welcome! Head to <strong>My Profile & Template</strong> to set up your artist profile and LampGO template so hosts can discover you.</div>`:''}
+    <div class="kpis k4">
+      <div class="kpi kart"><div class="kpi-lbl">Linked LampGOs</div><div class="kpi-val">${myLinkedGOs.length}</div><div class="kpi-sub">Using your template</div></div>
+      <div class="kpi kb"><div class="kpi-lbl">Total Orders</div><div class="kpi-val">${totalOrders}</div><div class="kpi-sub">Across all linked GOs</div></div>
+      <div class="kpi kg"><div class="kpi-lbl">Delivered</div><div class="kpi-val">${totalDelivered}</div><div class="kpi-sub">Fulfilled orders</div></div>
+      <div class="kpi ka"><div class="kpi-lbl">Est. Revenue</div><div class="kpi-val">$${totalRevenue.toFixed(0)}</div><div class="kpi-sub">Confirmed orders</div></div>
+    </div>
+    ${myLinkedGOs.length?`
+    <div class="card">
+      <div class="card-hdr"><h3>Your Active LampGOs</h3></div>
+      <div class="tbl-wrap"><table class="tbl">
+        <thead><tr><th>GO Name</th><th>Host</th><th>Fandom</th><th>Orders</th><th>Delivered</th><th>Status</th></tr></thead>
+        <tbody>${myLinkedGOs.map(g=>{
+          const host=usersCache[g.ownerId];
+          const del=g.orders.filter(o=>o.status==='delivered').length;
+          return `<tr>
+            <td style="font-weight:500;">${g.name}</td>
+            <td style="font-size:12px;color:var(--muted);">@${host?.username||'?'}</td>
+            <td>${g.fandom?`<span class="tag tag-fandom">${g.fandom}</span>`:'-'}</td>
+            <td class="mono">${g.orders.length}</td>
+            <td class="mono">${del}</td>
+            <td><span class="pill ${g.goStatus==='complete'?'pd':'pc'}">${g.goStatus==='complete'?'Complete':'Active'}</span></td>
+          </tr>`;}).join('')}
+        </tbody>
+      </table></div>
+    </div>`:'<div class="alert alert-y" style="margin-bottom:0;">No hosts have used your template yet. Make sure your profile is set up and your template has items!</div>'}
+  `;
+}
+
+// ════════════════════════════════════════════════
+//  SHARE MODAL
+// ════════════════════════════════════════════════
+function openShareModal(gid){
+  const g=GOS[gid]; if(!g) return;
+  const hosts=Object.values(usersCache||{}).filter(u=>(u.role==='host'||u.role==='owner')&&u.id!==ME.id&&u.id!==g.ownerId&&!(g.sharedWith||[]).find(s=>s.uid===u.id));
+  const existingRows=(g.sharedWith||[]).length?`<div style="margin-bottom:12px;"><div class="lbl" style="margin-bottom:7px;">Currently shared with</div>${(g.sharedWith||[]).map(s=>{const u=usersCache[s.uid];return `<div style="display:flex;align-items:center;gap:7px;padding:7px 9px;background:var(--surface2);border:1px solid var(--border);border-radius:8px;margin-bottom:5px;font-size:12px;"><span style="flex:1;font-weight:500;">@${u?.username||'?'}</span><span class="badge" style="background:var(--purple-l);color:var(--purple);">${getPermLabel(s.perm)}</span>${s.reason?`<span style="color:var(--muted);font-style:italic;font-size:11px;max-width:110px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="${s.reason}">"${s.reason}"</span>`:''}<button class="btn btn-xs" style="color:var(--red);border:1px solid var(--red);background:transparent;" onclick="removeShare('${gid}','${s.uid}')">Remove</button></div>`;}).join('')}</div>`:'';
+  if(!hosts.length&&!(g.sharedWith||[]).length){openModal('Share GO','','<div class="alert alert-y">No other hosts to share with yet.</div>','btn-outline','Close',null);return;}
+  openModal(`🤝 Share "${g.name}"`,hosts.length?'Give another host access to co-manage this GO.':'All available hosts already have access.',
+    `${existingRows}${hosts.length?`
+    <div class="field"><label class="lbl">Share with</label><select class="sel" id="sh-uid"><option value="">— select host —</option>${hosts.map(h=>`<option value="${h.id}">@${h.username}</option>`).join('')}</select></div>
+    <div class="lbl" style="margin-bottom:7px;">Permission</div>
+    <div class="perm-grid">
+      <div class="perm-opt" id="pm-view" onclick="selPerm('view')"><div class="pn">👁 View only</div><div class="pd">See orders, no changes</div></div>
+      <div class="perm-opt sel" id="pm-manage" onclick="selPerm('manage')"><div class="pn">✏️ Manage</div><div class="pd">Update order statuses</div></div>
+      <div class="perm-opt" id="pm-full" onclick="selPerm('full')" style="grid-column:1/-1;"><div class="pn">🔑 Full access</div><div class="pd">Edit GO + manage all orders</div></div>
+    </div>
+    <div class="field" style="margin-top:11px;"><label class="lbl">Reason <span class="required-star">*</span></label><input class="inp" id="sh-reason" placeholder="e.g. Helping with packaging this weekend"></div>`:''}`,
+    hosts.length?'btn-purple':'btn-outline',hosts.length?'Share Access':'Close',
+    hosts.length?()=>{
+      const uid=document.getElementById('sh-uid')?.value;
+      const reason=document.getElementById('sh-reason')?.value.trim();
+      const perm=document.querySelector('.perm-opt.sel')?.id.replace('pm-','');
+      if(!uid){toast('✕','Select a host',true);return;}
+      if(!reason){toast('✕','Reason required',true);return;}
+      if(!g.sharedWith)g.sharedWith=[];
+      g.sharedWith.push({uid,perm,reason,sharedAt:new Date().toISOString()});
+      renderAll();toast('🤝','Shared with @'+(usersCache[uid]?.username||'?'));
+    }:null);
+}
+function selPerm(p){['view','manage','full'].forEach(x=>document.getElementById('pm-'+x)?.classList.toggle('sel',x===p));}
+async function removeShare(gid,uid){const g=GOS[gid];if(!g)return;g.sharedWith=(g.sharedWith||[]).filter(s=>s.uid!==uid);closeModal();renderAll();toast('✓','Access removed');}
+
+// ════════════════════════════════════════════════
+//  ORDERS VIEW
+// ════════════════════════════════════════════════
+function renderOrdersView(id){
+  currentGO=id;const g=GOS[id];
+  if(!g||!canView(g)){document.getElementById('ord-empty-st').style.display='block';document.getElementById('ord-content').style.display='none';return;}
+  document.getElementById('ord-empty-st').style.display='none';document.getElementById('ord-content').style.display='block';
+  document.getElementById('ord-go-title').textContent=g.name;
+  const share=(g.sharedWith||[]).find(s=>s.uid===ME.id);
+  document.getElementById('ord-go-sub').textContent=`${g.orders.length} orders · ${share?getPermLabel(share.perm):g.ownerId===ME.id?'Your GO':'Owner view'}`;
+  const acts=[`<button class="btn btn-outline btn-sm" onclick="copyGOLink('${g.id}')">🔗 Link</button>`];
+  if(canEdit(g)){acts.push(`<button class="btn btn-sm btn-purple" onclick="exportPS('${g.id}')">🏴‍☠️ Pirate Ship</button>`);if(g.goStatus!=='complete')acts.push(`<button class="btn btn-green btn-sm" onclick="markComplete('${g.id}')">✓ Complete</button>`);acts.push(`<button class="btn btn-archive btn-sm" onclick="archiveGO('${g.id}')">Archive</button>`);}
+  document.getElementById('ord-top-acts').innerHTML=acts.join('');
+  renderOrdKPIs(g);filterOrders();
+}
+function renderOrdKPIs(g){
+  const t=g.orders.length,conf=g.orders.filter(o=>o.status==='confirmed').length,del=g.orders.filter(o=>o.status==='delivered').length,pend=g.orders.filter(o=>o.status==='pending').length;
+  document.getElementById('ord-kpis').innerHTML=`<div class="kpi kb"><div class="kpi-lbl">Total</div><div class="kpi-val">${t}</div></div><div class="kpi ka"><div class="kpi-lbl">Pending</div><div class="kpi-val">${pend}</div></div><div class="kpi kg"><div class="kpi-lbl">Confirmed</div><div class="kpi-val">${conf}</div></div><div class="kpi kp"><div class="kpi-lbl">Delivered</div><div class="kpi-val">${del}</div></div>`;
+}
+function filterOrders(){
+  if(!currentGO||!GOS[currentGO])return;
+  const g=GOS[currentGO];
+  const sf=document.getElementById('of-st').value;
+  const q=document.getElementById('of-q').value.toLowerCase();
+  let rows=g.orders;
+  if(sf)rows=rows.filter(o=>o.status===sf);
+  if(q)rows=rows.filter(o=>(o.username||'').toLowerCase().includes(q)||(o.fname+' '+o.lname).toLowerCase().includes(q));
+  document.getElementById('ord-badge').textContent=rows.length+' orders';
+  renderOrdTable(rows);
+}
+function renderOrdTable(rows){
+  if(!currentGO)return;
+  const g=GOS[currentGO];const canE=canEdit(g);
+  const sc={pending:'pp',confirmed:'pc',packaging:'ppkg','shipped-host':'psh',shipped:'ps',delivered:'pd',cancelled:'pcan'};
+  const so=['pending','confirmed','packaging','shipped-host','shipped','delivered','cancelled'];
+  document.getElementById('ord-tbody').innerHTML=rows.map((o,idx)=>{
+    const sel=selOrders.has(o.id);
+    const items=o.items.map(oi=>{const it=g.items.find(i=>i.id===oi.itemId);return it?`${it.name}×${oi.qty}`:'?';}).join(', ');
+    const addr=[o.addr1,o.city,o.state,o.zip].filter(Boolean).join(', ');
+    const statusCell=canE
+      ?`<select class="status-sel ${sc[o.status]||''}" onchange="setOrdSt('${o.id}',this.value)">${so.map(s=>`<option value="${s}" ${o.status===s?'selected':''}>${sLbl(s)}</option>`).join('')}</select>`
+      :`<span class="pill ${sc[o.status]||'pp'}">${sLbl(o.status)}</span>`;
+    return `<tr><td>${canE?`<input type="checkbox" class="cb" ${sel?'checked':''} onchange="togSel('${o.id}',this.checked)">`:''}</td><td class="muted mono">${idx+1}</td><td style="font-weight:500;white-space:nowrap;">${o.fname} ${o.lname}</td><td style="font-size:12px;color:var(--muted);">@${o.username||'—'}</td><td style="font-size:11px;max-width:140px;">${items}</td><td class="mono" style="font-weight:600;color:var(--accent);">$${o.total.toFixed(2)}</td><td style="font-size:11px;color:var(--muted);max-width:130px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;" title="${addr}">${addr}</td><td>${statusCell}</td><td>${canE?`<input style="border:1.5px solid var(--border);border-radius:6px;padding:3px 7px;font-size:11px;font-family:'DM Mono',monospace;width:115px;background:var(--surface2);outline:none;" value="${o.tracking||''}" placeholder="Tracking #" onchange="setTracking('${o.id}',this.value)">`:(o.tracking||'—')}</td><td>${o.payImgData?`<img src="${o.payImgData}" class="pay-thumb" onclick="viewPay('${o.id}')">`:'—'}</td><td style="font-size:11px;color:var(--muted);max-width:100px;">${o.notes||'—'}</td></tr>`;
+  }).join('');
+}
+function sLbl(s){return{pending:'⏳ Pending',confirmed:'✓ Confirmed',packaging:'📦 Packaging','shipped-host':'🚢 →Host',shipped:'✈️ Shipped',delivered:'✅ Delivered',cancelled:'✕ Cancelled'}[s]||s;}
+async function setOrdSt(oid,val){if(!currentGO)return;const o=GOS[currentGO].orders.find(x=>x.id===oid);if(o){o.status=val;await supa.from('orders').update({status:val}).eq('id',oid);renderOrdKPIs(GOS[currentGO]);renderAllGOs();}}
+async function setTracking(oid,val){if(!currentGO)return;const o=GOS[currentGO].orders.find(x=>x.id===oid);if(o){o.tracking=val;await supa.from('orders').update({tracking:val}).eq('id',oid);}}
+function viewPay(oid){if(!currentGO)return;const o=GOS[currentGO].orders.find(x=>x.id===oid);if(!o)return;openModal(`Payment — ${o.fname} ${o.lname}`,'',`<img src="${o.payImgData}" class="review-img">`,'btn-outline','Close',null);}
+function togSel(id,c){if(c)selOrders.add(id);else selOrders.delete(id);updBatch();}
+function toggleSelAll(c){if(!currentGO)return;if(c)GOS[currentGO].orders.forEach(o=>selOrders.add(o.id));else selOrders.clear();updBatch();filterOrders();}
+function updBatch(){const n=selOrders.size;document.getElementById('batch-bar').className='batch-bar'+(n>0?' on':'');document.getElementById('batch-info').textContent=n+' selected';}
+function clearSel(){selOrders.clear();document.getElementById('sel-all-cb').checked=false;updBatch();filterOrders();}
+async function applyBatch(){const val=document.getElementById('batch-sel').value;if(!val||!currentGO)return;GOS[currentGO].orders.forEach(o=>{if(selOrders.has(o.id))o.status=val;});clearSel();renderOrdKPIs(GOS[currentGO]);filterOrders();renderAllGOs();toast('✓',`Updated orders`);}
+
+// ════════════════════════════════════════════════
+//  OVERVIEW
+// ════════════════════════════════════════════════
+function renderOverview(id){
+  const g=GOS[id];if(!g||!canView(g))return;
+  document.getElementById('ov-empty').style.display='none';document.getElementById('ov-content').style.display='block';
+  document.getElementById('ov-title').textContent=g.name;document.getElementById('ov-sub').textContent=`${g.orders.length} orders · ${g.createdAt.split('T')[0]}`;
+  const t=g.orders.length||1,del=g.orders.filter(o=>o.status==='delivered').length,conf=g.orders.filter(o=>o.status==='confirmed').length,rev=g.orders.filter(o=>o.status!=='cancelled').reduce((s,o)=>s+o.total,0);
+  document.getElementById('ov-kpis').innerHTML=`<div class="kpi kb"><div class="kpi-lbl">Orders</div><div class="kpi-val">${g.orders.length}</div></div><div class="kpi kg"><div class="kpi-lbl">Confirmed</div><div class="kpi-val">${conf}</div></div><div class="kpi ka"><div class="kpi-lbl">Revenue</div><div class="kpi-val">$${rev.toFixed(0)}</div></div><div class="kpi kp"><div class="kpi-lbl">Delivered</div><div class="kpi-val">${del}</div><div class="kpi-sub">${Math.round(del/t*100)}%</div></div>`;
+  const stats=[{k:'pending',l:'Pending',c:'var(--muted2)'},{k:'confirmed',l:'Confirmed',c:'var(--blue)'},{k:'packaging',l:'Packaging',c:'var(--pink)'},{k:'shipped-host',l:'→Host',c:'var(--yellow)'},{k:'shipped',l:'Shipped',c:'var(--accent)'},{k:'delivered',l:'Delivered',c:'var(--green)'},{k:'cancelled',l:'Cancelled',c:'var(--red)'}];
+  document.getElementById('ov-progress').innerHTML=stats.map(s=>{const cnt=g.orders.filter(o=>o.status===s.k).length,pct=g.orders.length?Math.round(cnt/g.orders.length*100):0;return `<div style="display:flex;align-items:center;gap:8px;margin-bottom:9px;font-size:12px;"><div style="width:90px;color:var(--muted);">${s.l}</div><div style="flex:1;height:15px;background:var(--surface2);border-radius:3px;overflow:hidden;"><div style="height:100%;width:${pct}%;background:${s.c};border-radius:3px;display:flex;align-items:center;justify-content:flex-end;padding-right:3px;">${cnt>0?`<span style="font-size:9px;font-weight:700;color:#fff;">${cnt}</span>`:''}</div></div><div style="width:18px;text-align:right;font-weight:600;font-family:'DM Mono',monospace;">${cnt}</div></div>`;}).join('');
+  const im={};g.orders.forEach(o=>o.items.forEach(oi=>{im[oi.itemId]=(im[oi.itemId]||0)+oi.qty;}));
+  const mx=Math.max(...Object.values(im),1);
+  document.getElementById('ov-items').innerHTML=g.items.map(it=>{const qty=im[it.id]||0;const pct=Math.round(qty/mx*100);return `<div style="display:flex;align-items:center;gap:8px;margin-bottom:9px;font-size:12px;">${it.imgData?`<img src="${it.imgData}" style="width:24px;height:24px;border-radius:4px;object-fit:cover;">`:'<div style="width:24px;height:24px;border-radius:4px;background:var(--surface2);display:flex;align-items:center;justify-content:center;font-size:11px;">🖼</div>'}<div style="flex:1;min-width:0;"><div style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-weight:500;">${it.name}</div><div style="height:5px;background:var(--surface2);border-radius:3px;margin-top:3px;overflow:hidden;"><div style="height:100%;width:${pct}%;background:var(--accent);border-radius:3px;"></div></div></div><div class="mono" style="font-weight:600;">${qty}</div></div>`;}).join('');
+}
+
+// ════════════════════════════════════════════════
+//  ARCHIVE
+// ════════════════════════════════════════════════
+function renderArchive(){
+  const archived=Object.values(GOS).filter(g=>g.archived&&canView(g)).sort((a,b)=>b.createdAt.localeCompare(a.createdAt));
+  document.getElementById('archive-empty').style.display=archived.length?'none':'block';
+  document.getElementById('archive-list').innerHTML=archived.map(g=>`<div class="go-card archived"><div><div class="go-title">${g.name}</div><div class="go-meta"><span>📅 ${g.createdAt.split('T')[0]}</span><span>👥 ${g.orders.length}</span></div></div><div class="go-actions"><span class="pill pp">Archived</span><button class="btn btn-outline btn-sm" onclick="restoreGO('${g.id}')">Restore</button>${ME.role==='owner'||g.ownerId===ME.id?`<button class="btn btn-xs" style="color:var(--red);border:1px solid var(--red);background:transparent;" onclick="deleteGO('${g.id}')">Delete</button>`:''}</div></div>`).join('');
+}
+function markComplete(id){openModal('Mark LampGO Complete?',`Mark LampGO "${GOS[id]?.name}" as complete?`,'','btn-green','Mark Complete',async()=>{GOS[id].goStatus='complete';await supa.from('lampgos').update({go_status:'complete'}).eq('id',id);await renderAll();toast('✓','Marked complete!');});}
+function archiveGO(id){openModal('Archive?',`Archive LampGO "${GOS[id]?.name}"?`,'','btn-archive','Archive',async()=>{GOS[id].archived=true;if(currentGO===id)currentGO=null;await supa.from('lampgos').update({archived:true}).eq('id',id);await renderAll();toast('🗃','Archived');});}
+async function restoreGO(id){GOS[id].archived=false;await supa.from('lampgos').update({archived:false}).eq('id',id);await renderAll();toast('✦','Restored!');}
+function deleteGO(id){openModal('Delete?',`Permanently delete LampGO "${GOS[id]?.name}"? Cannot be undone.`,'','btn-red','Delete',async()=>{const gid=id;delete GOS[id];if(currentGO===id)currentGO=null;await supa.from('lampgos').delete().eq('id',gid);await renderAll();toast('✕','Deleted',true);});}
+
+// ════════════════════════════════════════════════
+//  ADMIN
+// ════════════════════════════════════════════════
+async function renderAdmin(){
+  if(ME.role!=='owner')return;
+  showLoading('Loading admin data...');
+  const allUsers=await DB.getAllUsers();
+  allUsers.forEach(u=>{usersCache[u.id]=normUser(u);});
+  hideLoading();
+  const users=Object.values(usersCache);
+  const pendingHosts=users.filter(u=>u.role==='pending-host');
+  const pendingArtists=users.filter(u=>u.role==='pending-artist'&&!u.artistProfile?.approved);
+  const allPending=[...pendingHosts,...pendingArtists];
+  document.getElementById('admin-kpis').innerHTML=`<div class="kpi kow"><div class="kpi-lbl">Total Users</div><div class="kpi-val">${users.length}</div></div><div class="kpi ky"><div class="kpi-lbl">Pending</div><div class="kpi-val">${allPending.length}</div></div><div class="kpi kg"><div class="kpi-lbl">Active Hosts</div><div class="kpi-val">${users.filter(u=>u.role==='host').length}</div></div><div class="kpi kart"><div class="kpi-lbl">Artists</div><div class="kpi-val">${users.filter(u=>u.role==='artist'||u.role==='pending-artist').length}</div></div>`;
+  document.getElementById('pending-badge').textContent=allPending.length;
+  document.getElementById('pending-tbody').innerHTML=allPending.length
+    ?allPending.map(u=>`<tr><td style="font-weight:500;">@${u.username}</td><td style="font-size:12px;">${u.email}</td><td><span class="pill ${u.role==='pending-host'?'pp':'part'}">${u.role==='pending-host'?'Host request':'Artist request'}</span></td><td style="font-size:11px;color:var(--muted);">${u.createdAt.split('T')[0]}</td><td><div style="display:flex;gap:5px;"><button class="btn btn-green btn-xs" onclick="approveUser('${u.id}')">✓ Approve</button><button class="btn btn-xs" style="color:var(--red);border:1px solid var(--red);background:transparent;" onclick="rejectUser('${u.id}')">✕ Reject</button></div></td></tr>`).join('')
+    :'<tr><td colspan="5" style="text-align:center;color:var(--muted);padding:18px;font-size:13px;">No pending approvals ✓</td></tr>';
+  renderUsersTable();
+  document.getElementById('admin-gos-tbody').innerHTML=Object.values(GOS).sort((a,b)=>b.createdAt.localeCompare(a.createdAt)).map(g=>{
+    const host=usersCache[g.ownerId];const artist=g.linkedArtistId?usersCache[g.linkedArtistId]:null;
+    return `<tr><td style="font-weight:500;">${g.name}</td><td style="font-size:12px;">@${host?.username||'?'}</td><td style="font-size:12px;">${artist?`<span class="pill part">🎨 ${artist.artistProfile?.name||artist.username}</span>`:'—'}</td><td class="mono">${g.orders.length}</td><td><span class="pill ${g.archived?'pcan':g.goStatus==='complete'?'pd':'pc'}">${g.archived?'Archived':g.goStatus==='complete'?'Complete':'Active'}</span></td><td style="font-size:11px;color:var(--muted);">${g.createdAt.split('T')[0]}</td><td><button class="btn btn-xs btn-outline" onclick="openOrders('${g.id}');switchTab('view-orders',null)">Orders</button></td></tr>`;
+  }).join('');
+}
+async function renderUsersTable(){
+  const q=(document.getElementById('user-search')?.value||'').toLowerCase();
+  const rc={owner:'rb-owner',host:'rb-host',customer:'rb-customer',artist:'rb-artist','pending-artist':'rb-artist','pending-host':'rb-host'};
+  const users=Object.values(usersCache||{}).filter(u=>u.role!=='pending-host'&&u.username.toLowerCase().includes(q)||u.email?.toLowerCase().includes(q)).sort((a,b)=>a.createdAt.localeCompare(b.createdAt));
+  document.getElementById('users-tbody').innerHTML=users.map(u=>{
+    const isSelf=u.id===ME.id,isOwner=u.role==='owner';
+    return `<tr><td style="font-weight:500;">@${u.username}${isSelf?' <span style="font-size:10px;color:var(--muted);">(you)</span>':''}</td><td style="font-size:12px;color:var(--muted);">${u.email}</td><td><span class="role-badge ${rc[u.role]||'rb-host'}">${u.role}</span></td><td style="font-size:11px;color:var(--muted);">${u.createdAt.split('T')[0]}</td><td>${!isSelf&&!isOwner?`<div style="display:flex;gap:4px;flex-wrap:wrap;">${u.role==='customer'?`<button class="btn btn-xs" style="background:var(--accent-l);color:var(--accent);border-color:var(--accent);" onclick="setUserRole('${u.id}','host')">→ Host</button>`:''}${u.role==='pending-artist'?`<button class="btn btn-xs btn-artist" onclick="approveUser('${u.id}')">✓ Approve Artist</button>`:''}${u.role==='artist'?`<button class="btn btn-xs" style="background:var(--artist-l);color:var(--artist);border-color:var(--artist);" onclick="setUserRole('${u.id}','owner')">→ Owner</button>`:''}${u.role==='host'?`<button class="btn btn-xs btn-owner" onclick="setUserRole('${u.id}','owner')">→ Owner</button><button class="btn btn-xs btn-outline" onclick="setUserRole('${u.id}','customer')">→ Customer</button>`:''}  <button class="btn btn-xs" style="color:var(--red);border:1px solid var(--red);background:transparent;" onclick="deleteUser('${u.id}')">Delete</button></div>`:'—'}</td></tr>`;
+  }).join('');
+}
+async function approveUser(uid){
+  const u=usersCache[uid];if(!u)return;
+  const newRole=u.role==='pending-host'?'host':u.role==='pending-artist'?'artist':null;
+  if(!newRole)return;
+  u.role=newRole;
+  if(newRole==='artist'&&u.artistProfile)u.artistProfile.approved=true;
+  await supa.from('users').update({role:newRole,artist_profile:u.artist_profile||u.artistProfile||null}).eq('id',uid);
+  renderAdmin();if(newRole==='artist')populateBrowseFilters();
+  toast(newRole==='artist'?'🎨':'✓',`@${u.username} approved as ${newRole}!`);
+}
+function rejectUser(uid){const uname=usersCache[uid]?.username||'?';openModal('Reject?','Remove account for @'+uname+'?','','btn-red','Reject & Delete',async()=>{delete usersCache[uid];await supa.from('users').delete().eq('id',uid);renderAdmin();toast('✕','Rejected');});}
+async function setUserRole(uid,role){if(usersCache[uid])usersCache[uid].role=role;await supa.from('users').update({role}).eq('id',uid);renderAdmin();toast('✓','Role updated to '+role);}
+function deleteUser(uid){const uname=usersCache[uid]?.username||'?';openModal('Delete user?','Delete @'+uname+'?','','btn-red','Delete',async()=>{delete usersCache[uid];await supa.from('users').delete().eq('id',uid);renderAdmin();toast('✕','Deleted',true);});}
+
+// ════════════════════════════════════════════════
+//  CUSTOMER DASHBOARD
+// ════════════════════════════════════════════════
+async function renderCustomerDash(){
+  if(!ME)return;
+  const allOrders=[];
+  Object.values(GOS).forEach(g=>{g.orders.forEach(o=>{if(o.email===ME.email||o.username===ME.username)allOrders.push({...o,goName:g.name,goId:g.id,goItems:g.items});});});
+  allOrders.sort((a,b)=>b.createdAt.localeCompare(a.createdAt));
+  document.getElementById('cust-empty').style.display=allOrders.length?'none':'block';
+  const tls=['pending','confirmed','packaging','shipped-host','shipped','delivered'];
+  document.getElementById('cust-orders-list').innerHTML=allOrders.map(o=>{
+    const ci=tls.indexOf(o.status);
+    const items=o.items.map(oi=>{const it=o.goItems.find(i=>i.id===oi.itemId);return it?`${it.name} ×${oi.qty}`:'?';}).join(', ');
+    const tl=tls.map((s,i)=>{const cls=i<ci?'done':i===ci?'current':'';const icons={pending:'⏳',confirmed:'✓',packaging:'📦','shipped-host':'🚢',shipped:'✈️',delivered:'✅'};return `<div class="tl-step ${cls}"><div class="tl-dot">${cls==='done'?'✓':cls==='current'?icons[s]||'●':''}</div><div class="tl-label">${s.replace('-',' ')}</div></div>`;}).join('');
+    return `<div class="order-card"><div style="display:flex;align-items:flex-start;justify-content:space-between;gap:10px;flex-wrap:wrap;"><div><div class="order-card-title">${o.goName}</div><div style="font-size:12px;color:var(--muted);margin-top:2px;">${items}</div></div><div style="text-align:right;"><div class="mono" style="font-weight:600;color:var(--accent);font-size:16px;">$${o.total.toFixed(2)}</div><div style="font-size:11px;color:var(--muted);">${o.createdAt.split('T')[0]}</div></div></div>${o.tracking?`<div style="margin-top:7px;font-size:12px;"><span style="color:var(--muted);">Tracking: </span><span class="mono">${o.tracking}</span></div>`:''}<div class="tl">${tl}</div></div>`;
+  }).join('');
+}
+
+// ════════════════════════════════════════════════
+//  PROFILE
+// ════════════════════════════════════════════════
+function loadProfile(){document.getElementById('p-username').value=ME.username;document.getElementById('p-email').value=ME.email;document.getElementById('p-pass').value='';document.getElementById('prof-err').style.display='none';document.getElementById('prof-ok').style.display='none';renderThemePicker();}
+async function saveProfile(){
+  const u=document.getElementById('p-username').value.trim(),e=document.getElementById('p-email').value.trim(),p=document.getElementById('p-pass').value;
+  const err=document.getElementById('prof-err'),ok=document.getElementById('prof-ok');
+  err.style.display='none';ok.style.display='none';
+  if(!u||!e){err.textContent='Username and email required.';err.style.display='block';return;}
+  if(Object.values(usersCache||{}).find(x=>x.id!==ME.id&&(x.username===u||x.email===e))){err.textContent='Username or email in use.';err.style.display='block';return;}
+  ME.username=u;ME.email=e;if(p)ME.passHash=hashPass(p);usersCache[ME.id]=ME;buildNav();ok.textContent='Profile updated ✓';ok.style.display='block';
+}
+
+// ════════════════════════════════════════════════
+//  ORDER FORM
+// ════════════════════════════════════════════════
+async function showOrderForm(gid){
+  formGOid=gid;formPayData=null;
+  // Load from Supabase if not in cache (public form link)
+  if(!GOS[gid]){
+    showLoading('Loading LampGO...');
+    const goRow=await DB.getLampGO(gid);
+    if(goRow){
+      const orders=await DB.getOrders(gid);
+      GOS[gid]=normGO(goRow,orders);
+    }
+    hideLoading();
+  }
+  const g=GOS[gid];
+  if(!g||g.archived){document.getElementById('order-form-screen').innerHTML='<div style="text-align:center;padding:80px 20px;"><div style="font-size:40px;opacity:.4;margin-bottom:14px;">😔</div><div style="font-family:\'Almendra\',serif;font-size:22px;margin-bottom:8px;">This LampGO is not available</div><div style="font-size:13px;color:#8a7d6e;">It may have been closed or removed by the host.</div></div>';return;}
+  if(g.maxSlots>0&&g.orders.length>=g.maxSlots){document.getElementById('form-main').innerHTML='<div style="text-align:center;padding:50px;"><div style="font-size:36px;margin-bottom:10px;">😔</div><div style="font-family:\'Almendra\',serif;font-size:20px;">This LampGO is full</div></div>';return;}
+  document.getElementById('form-title').textContent=g.name;
+  document.getElementById('form-desc').textContent=g.desc||'';
+  // Artist credit
+  const artistUser=g.linkedArtistId?usersCache[g.linkedArtistId]:null;
+  const artCredit=document.getElementById('form-artist-credit');
+  if(artistUser&&artistUser.artistProfile){artCredit.style.display='block';artCredit.textContent=`🎨 Art by ${artistUser.artistProfile.name||artistUser.username}`;}
+  else artCredit.style.display='none';
+  const meta=[];
+  if(g.fandom)meta.push(`<span style="background:rgba(255,255,255,.7);border:1px solid var(--border);border-radius:20px;padding:3px 12px;font-size:12px;font-weight:600;">${g.fandom}</span>`);
+  if(g.deadline)meta.push(`<span style="background:rgba(255,255,255,.7);border:1px solid var(--border);border-radius:20px;padding:3px 12px;font-size:12px;font-weight:600;">⏰ Closes ${g.deadline}</span>`);
+  if(g.maxSlots>0)meta.push(`<span style="background:rgba(255,255,255,.7);border:1px solid var(--border);border-radius:20px;padding:3px 12px;font-size:12px;font-weight:600;">🎟 ${g.orders.length}/${g.maxSlots}</span>`);
+  document.getElementById('form-meta').innerHTML=meta.join('');
+  document.getElementById('form-items').innerHTML=g.items.map(it=>`<div class="cart-row"><div class="cart-img">${it.imgData?`<img src="${it.imgData}">`:'🖼'}</div><div><div style="font-weight:500;font-size:13px;">${it.name}</div><div style="font-size:12px;color:var(--muted);">$${Number(it.price).toFixed(2)}</div></div><input type="number" class="qty-inp" id="qty-${it.id}" min="0" value="0" oninput="calcTotal('${gid}')"><div class="mono" style="font-weight:600;text-align:right;" id="sub-${it.id}">$0.00</div></div>`).join('');
+  document.getElementById('form-pay-info-box').innerHTML=`<strong>💳 Payment:</strong><br>${g.paymentInfo||'Contact the host for payment info.'}<br><br><span style="color:var(--red);font-weight:600;">Upload your payment screenshot below — required to submit.</span>`;
+  document.getElementById('form-auth-prompt').style.display=ME?'none':'block';
+  if(ME){document.getElementById('ff-un').value=ME.username||'';document.getElementById('ff-em').value=ME.email||'';}
+  calcTotal(gid);
+  document.getElementById('form-main').style.display='block';document.getElementById('form-success').style.display='none';
+  document.querySelectorAll('.field-invalid').forEach(f=>f.classList.remove('field-invalid'));
+  setTimeout(()=>restoreDraftIfExists(gid),100);
+}
+function showFormLogin(){const user=prompt('Username or email:'),pass=prompt('Password:');if(!user||!pass)return;const u=Object.values(usersCache||{}).find(x=>(x.username===user||x.email===user)&&x.passHash===hashPass(pass));if(!u){alert('Invalid credentials.');return;}ME=u;document.getElementById('form-auth-prompt').style.display='none';document.getElementById('ff-un').value=ME.username||'';document.getElementById('ff-em').value=ME.email||'';toast('✓',`Signed in as @${ME.username}`);}
+function calcTotal(gid){const g=GOS[gid];if(!g)return;let total=0;g.items.forEach(it=>{const qty=parseInt(document.getElementById('qty-'+it.id)?.value)||0;const sub=qty*Number(it.price);total+=sub;const el=document.getElementById('sub-'+it.id);if(el)el.textContent='$'+sub.toFixed(2);});document.getElementById('form-total').textContent='$'+total.toFixed(2);}
+function payDrop(e){e.preventDefault();document.getElementById('pay-zone').className='pay-zone';const f=e.dataTransfer.files[0];if(f&&f.type.startsWith('image/'))readPay(f);}
+function payFile(inp){if(inp.files[0])readPay(inp.files[0]);}
+function readPay(f){const r=new FileReader();r.onload=e=>{formPayData=e.target.result;const p=document.getElementById('pay-preview');p.src=formPayData;p.style.display='block';document.getElementById('pay-zone').className='pay-zone has-img';document.getElementById('ff-pay-w').classList.remove('field-invalid');};r.readAsDataURL(f);}
+function validateForm(gid){
+  const g=GOS[gid];if(!g)return false;let ok=true;
+  if(!g.items.some(it=>(parseInt(document.getElementById('qty-'+it.id)?.value)||0)>0)){toast('✕','Select at least one item',true);ok=false;}
+  [['ff-fn-w','ff-fn'],['ff-ln-w','ff-ln'],['ff-un-w','ff-un'],['ff-em-w','ff-em'],['ff-a1-w','ff-a1'],['ff-ci-w','ff-ci'],['ff-st-w','ff-st'],['ff-zp-w','ff-zp'],['ff-co-w','ff-co']].forEach(([wid,iid])=>{const w=document.getElementById(wid),i=document.getElementById(iid);if(w&&i){if(!i.value.trim())w.classList.add('field-invalid');else w.classList.remove('field-invalid');}});
+  if(document.querySelectorAll('.field-invalid').length>0)ok=false;
+  if(!formPayData){document.getElementById('ff-pay-w').classList.add('field-invalid');ok=false;}
+  else{document.getElementById('ff-pay-w').classList.remove('field-invalid');}
+  return ok;
+}
+async function submitOrder(){
+  if(!validateForm(formGOid))return;
+  const g=GOS[formGOid];
+  const items=g.items.map(it=>({itemId:it.id,qty:parseInt(document.getElementById('qty-'+it.id)?.value)||0})).filter(oi=>oi.qty>0);
+  const total=items.reduce((s,oi)=>{const it=g.items.find(i=>i.id===oi.itemId);return s+(it?Number(it.price)*oi.qty:0);},0);
+  const order={id:genUUID(),lampgoId:formGOid,fname:document.getElementById('ff-fn').value.trim(),lname:document.getElementById('ff-ln').value.trim(),username:document.getElementById('ff-un').value.trim(),email:document.getElementById('ff-em').value.trim(),addr1:document.getElementById('ff-a1').value.trim(),addr2:document.getElementById('ff-a2').value.trim(),city:document.getElementById('ff-ci').value.trim(),state:document.getElementById('ff-st').value.trim(),zip:document.getElementById('ff-zp').value.trim(),country:document.getElementById('ff-co').value.trim(),items,total,payImgData:formPayData,notes:document.getElementById('ff-notes').value.trim(),status:'pending',tracking:'',createdAt:new Date().toISOString(),buyerUserId:ME?.id||null};
+  g.orders.push(order);
+  showLoading('Submitting order...');
+  try{
+    await DB.upsertOrder(order);
+    await DB.deleteDraft(formGOid, order.email).catch(()=>{});
+    hideLoading();
+  }catch(e){hideLoading();console.error('order save error',e);}
+  document.getElementById('success-summary').innerHTML=`<div style="font-size:11px;font-weight:600;color:var(--muted);text-transform:uppercase;letter-spacing:.06em;margin-bottom:8px;">Order Summary</div>${items.map(oi=>{const it=g.items.find(i=>i.id===oi.itemId);return it?`<div style="display:flex;justify-content:space-between;padding:5px 0;border-bottom:1px solid var(--border);font-size:13px;"><span>${it.name} ×${oi.qty}</span><span class="mono">$${(Number(it.price)*oi.qty).toFixed(2)}</span></div>`:'';}).join('')}<div style="display:flex;justify-content:space-between;padding:8px 0 0;font-weight:600;"><span>Total</span><span class="mono" style="color:var(--accent);">$${total.toFixed(2)}</span></div><div style="margin-top:8px;font-size:12px;color:var(--muted);">${order.fname} ${order.lname} · @${order.username}</div>`;
+  document.getElementById('form-main').style.display='none';document.getElementById('form-success').style.display='block';
+}
+function resetForm(){formPayData=null;document.getElementById('form-success').style.display='none';showOrderForm(formGOid);}
+
+// ════════════════════════════════════════════════
+//  PIRATE SHIP EXPORT
+// ════════════════════════════════════════════════
+function exportPS(id){
+  const g=GOS[id];if(!g)return;
+  openModal('🏴‍☠️ Export for Pirate Ship','Select statuses to include:',
+    `<div style="display:flex;flex-direction:column;gap:6px;">${['pending','confirmed','packaging','shipped-host','shipped','delivered'].map(s=>`<label style="font-size:13px;display:flex;align-items:center;gap:7px;cursor:pointer;"><input type="checkbox" id="exp-${s}" ${['pending','confirmed','packaging','shipped-host'].includes(s)?'checked':''}> ${sLbl(s)}</label>`).join('')}</div>`,
+    'btn-purple','⬇ Download .xlsx',()=>{
+      const inc=new Set(['pending','confirmed','packaging','shipped-host','shipped','delivered'].filter(s=>document.getElementById('exp-'+s)?.checked));
+      const orders=g.orders.filter(o=>inc.has(o.status));
+      if(!orders.length){toast('✕','No matching orders',true);return;}
+      const rows=orders.map((o,i)=>({'Order Number':i+1,'Name':`${o.fname} ${o.lname}`.trim(),'Username':o.username||'','Email':o.email||'','Address Line 1':o.addr1||'','Address Line 2':o.addr2||'','City':o.city||'','State':o.state||'','ZIP':o.zip||'','Country':o.country||'United States','Order Total':'$'+o.total.toFixed(2),'Items':o.items.map(oi=>{const it=g.items.find(i=>i.id===oi.itemId);return it?`${it.name} x${oi.qty}`:'';}).filter(Boolean).join(', '),'Status':o.status,'Tracking':o.tracking||'','Notes':o.notes||''}));
+      const wb=XLSX.utils.book_new();const ws=XLSX.utils.json_to_sheet(rows);ws['!cols']=[{wch:12},{wch:22},{wch:16},{wch:24},{wch:26},{wch:16},{wch:14},{wch:7},{wch:10},{wch:14},{wch:12},{wch:36},{wch:12},{wch:16},{wch:22}];
+      XLSX.utils.book_append_sheet(wb,ws,'Pirate Ship Import');
+      XLSX.writeFile(wb,`${g.name.replace(/[^a-z0-9]/gi,'_').slice(0,36)}_PirateShip_${new Date().toISOString().split('T')[0]}.xlsx`);
+      toast('🏴‍☠️',`Exported ${orders.length} orders`);
+    });
+}
+
+// ════════════════════════════════════════════════
+//  MODAL / TOAST / UTILS
+// ════════════════════════════════════════════════
+let mCb=null;
+function openModal(title,body,extra,btnCls,btnLbl,cb){
+  document.getElementById('m-title').textContent=title;document.getElementById('m-body').textContent=body;document.getElementById('m-extra').innerHTML=extra||'';
+  const btn=document.getElementById('m-ok');btn.className='btn '+(btnCls||'btn-primary');btn.textContent=btnLbl||'OK';
+  mCb=cb;btn.onclick=()=>{closeModal();if(mCb)mCb();};
+  document.getElementById('modal-bg').classList.add('open');
+}
+function closeModal(){document.getElementById('modal-bg').classList.remove('open');}
+document.getElementById('modal-bg').addEventListener('click',e=>{if(e.target===e.currentTarget)closeModal();});
+function toast(icon,msg,err){
+  const t=document.getElementById('toast');
+  document.getElementById('t-i').textContent=icon;
+  document.getElementById('t-m').textContent=msg;
+  t.style.borderColor=err?'var(--red)':msg.includes('Copied')||msg.includes('copied')?'var(--accent)':'var(--accent)';
+  t.style.color='var(--text)';
+  t.style.background='var(--surface)';
+  t.classList.add('show');
+  setTimeout(()=>t.classList.remove('show'),3200);
+}
+// ════════════════════════════════════════════════
+//  THEME SYSTEM
+// ════════════════════════════════════════════════
+const THEMES = {
+  forest:    { name:'Forest Lantern',     emoji:'🌲', desc:'Moonlit grove, lantern glow',
+    dark: { bg:'#162012',surface:'#1e2d18',surface2:'#243020',border:'#304a28',border2:'#4a6a38',text:'#f0ead0',muted:'#7a9a6a',muted2:'#4a6a3a',accent:'#c0392b',accentL:'rgba(192,57,43,.18)',accentLL:'rgba(192,57,43,.08)',shadow:'rgba(22,32,18,.4)' },
+    light:{ bg:'#f0f7ee',surface:'#fff',surface2:'#e4f0e0',border:'#c0d8b0',border2:'#9ab890',text:'#0e1e0a',muted:'#6a8a5a',muted2:'#a0b890',accent:'#c0392b',accentL:'rgba(192,57,43,.12)',accentLL:'rgba(192,57,43,.05)',shadow:'rgba(14,30,10,.1)' }
+  },
+  bonfire:   { name:'Bonfire Red',        emoji:'🔥', desc:'Ember warmth, night market',
+    dark: { bg:'#2d1510',surface:'#3a1c10',surface2:'#4a2215',border:'#5a2a18',border2:'#7a3a22',text:'#f5e6d0',muted:'#a07060',muted2:'#6a4030',accent:'#c0392b',accentL:'rgba(192,57,43,.22)',accentLL:'rgba(192,57,43,.1)',shadow:'rgba(45,21,16,.5)' },
+    light:{ bg:'#fdf4ef',surface:'#fff',surface2:'#fde8de',border:'#f0d8cc',border2:'#d4b8a8',text:'#2a0e08',muted:'#b07060',muted2:'#d4a890',accent:'#c0392b',accentL:'rgba(192,57,43,.12)',accentLL:'rgba(192,57,43,.05)',shadow:'rgba(42,14,8,.08)' }
+  },
+  cafe:      { name:'Café Candle',        emoji:'☕', desc:'Dark roast, warm wood',
+    dark: { bg:'#1e1408',surface:'#2a1c0e',surface2:'#3a2810',border:'#4a3018',border2:'#6a4820',text:'#f5e6c8',muted:'#8a7050',muted2:'#5a4030',accent:'#8b5a2b',accentL:'rgba(139,90,43,.22)',accentLL:'rgba(139,90,43,.1)',shadow:'rgba(30,20,8,.5)' },
+    light:{ bg:'#fdf6ee',surface:'#fff',surface2:'#fdefd8',border:'#e8d8c0',border2:'#c8b898',text:'#1e1008',muted:'#9a7a50',muted2:'#c8a870',accent:'#8b5a2b',accentL:'rgba(139,90,43,.14)',accentLL:'rgba(139,90,43,.06)',shadow:'rgba(30,16,8,.08)' }
+  },
+  midnight:  { name:'Midnight Moonlight', emoji:'🌊', desc:'Still water, starlit blue',
+    dark: { bg:'#0e1520',surface:'#162030',surface2:'#1e3048',border:'#243a50',border2:'#3a5a70',text:'#e8f0f8',muted:'#4a7a9a',muted2:'#2a5070',accent:'#2a6bae',accentL:'rgba(42,107,174,.22)',accentLL:'rgba(42,107,174,.08)',shadow:'rgba(14,21,32,.5)' },
+    light:{ bg:'#eef4fa',surface:'#fff',surface2:'#ddeef8',border:'#c0d8ee',border2:'#90b8d8',text:'#0e1e30',muted:'#6a9ab8',muted2:'#a0c0d8',accent:'#2a6bae',accentL:'rgba(42,107,174,.12)',accentLL:'rgba(42,107,174,.05)',shadow:'rgba(14,30,48,.08)' }
+  },
+  parchment: { name:'Warm Parchment',     emoji:'☀️', desc:'Afternoon light, cozy cream',
+    dark: { bg:'#2a1f10',surface:'#382a18',surface2:'#4a3820',border:'#5a4028',border2:'#7a5838',text:'#f5ead0',muted:'#9a8060',muted2:'#6a5038',accent:'#c87941',accentL:'rgba(200,121,65,.22)',accentLL:'rgba(200,121,65,.09)',shadow:'rgba(42,31,16,.5)' },
+    light:{ bg:'#faf7f0',surface:'#fff',surface2:'#fdf0e0',border:'#e8dcc8',border2:'#c8b898',text:'#2a1808',muted:'#9a7a50',muted2:'#c8a870',accent:'#c87941',accentL:'rgba(200,121,65,.14)',accentLL:'rgba(200,121,65,.06)',shadow:'rgba(42,24,8,.08)' }
+  },
+  blossom:   { name:'Blossom Starlight',  emoji:'🌸', desc:'Sakura petals, violet sky',
+    dark: { bg:'#120d1e',surface:'#1e1428',surface2:'#2a1a3a',border:'#3a2050',border2:'#5a3878',text:'#f0d8f8',muted:'#8a6aaa',muted2:'#5a3a7a',accent:'#c84d8c',accentL:'rgba(200,77,140,.22)',accentLL:'rgba(200,77,140,.09)',shadow:'rgba(18,13,30,.5)' },
+    light:{ bg:'#fdf0f8',surface:'#fff',surface2:'#fde0f0',border:'#f0c8e0',border2:'#d8a0c8',text:'#2a0820',muted:'#b07090',muted2:'#d8a0c0',accent:'#c84d8c',accentL:'rgba(200,77,140,.12)',accentLL:'rgba(200,77,140,.05)',shadow:'rgba(42,8,32,.08)' }
+  }
+};
+
+// (appTheme and appMode declared in APP STATE above)
+
+function applyAppTheme(themeKey, mode) {
+  appTheme = themeKey;
+  appMode  = mode;
+  localStorage.setItem('lamplit-theme', themeKey);
+  localStorage.setItem('lamplit-mode',  mode);
+  const t = THEMES[themeKey][mode];
+  const r = document.documentElement.style;
+  r.setProperty('--bg',        t.bg);
+  r.setProperty('--surface',   t.surface);
+  r.setProperty('--surface2',  t.surface2);
+  r.setProperty('--surface3',  t.surface2);
+  r.setProperty('--border',    t.border);
+  r.setProperty('--border2',   t.border2);
+  r.setProperty('--text',      t.text);
+  r.setProperty('--muted',     t.muted);
+  r.setProperty('--muted2',    t.muted2);
+  r.setProperty('--accent',    t.accent);
+  r.setProperty('--accent-l',  t.accentL);
+  r.setProperty('--accent-ll', t.accentLL);
+  r.setProperty('--shadow',    `0 2px 12px ${t.shadow}`);
+  r.setProperty('--shadow-md', `0 4px 20px ${t.shadow}`);
+  r.setProperty('--shadow-lg', `0 8px 40px ${t.shadow}`);
+  document.body.style.background = t.bg;
+  document.body.style.color = t.text;
+  // auth screen — match theme bg with a soft radial accent glow behind the card
+  const authWrap = document.getElementById('auth-screen');
+  if(authWrap){
+    authWrap.style.background = `radial-gradient(ellipse at center, ${t.accentL} 0%, ${t.bg} 65%)`;
+  }
+  const orderForm = document.getElementById('order-form-screen');
+  if(orderForm){
+    orderForm.style.background = t.bg;
+    orderForm.style.color = t.text;
+  }
+  renderThemePicker();
+}
+
+function setAppMode(mode) {
+  applyAppTheme(appTheme, mode);
+}
+
+function renderThemePicker() {
+  const grid = document.getElementById('tp-grid');
+  if (!grid) return;
+  // mode buttons
+  const darkBtn  = document.getElementById('tp-mode-dark');
+  const lightBtn = document.getElementById('tp-mode-light');
+  if (darkBtn && lightBtn) {
+    const t = THEMES[appTheme][appMode];
+    darkBtn.style.background  = appMode === 'dark'  ? t.accent : 'transparent';
+    darkBtn.style.color       = appMode === 'dark'  ? '#fff'   : t.muted;
+    darkBtn.style.borderColor = appMode === 'dark'  ? t.accent : t.border;
+    lightBtn.style.background = appMode === 'light' ? t.accent : 'transparent';
+    lightBtn.style.color      = appMode === 'light' ? '#fff'   : t.muted;
+    lightBtn.style.borderColor= appMode === 'light' ? t.accent : t.border;
+  }
+  grid.innerHTML = Object.entries(THEMES).map(([key, th]) => {
+    const t = th[appMode];
+    const isActive = key === appTheme;
+    return `<div onclick="applyAppTheme('${key}','${appMode}')" style="
+        background:${t.surface};
+        border:2px solid ${isActive ? t.accent : t.border};
+        border-radius:14px;overflow:hidden;cursor:pointer;
+        transition:all .2s;
+        box-shadow:${isActive ? `0 0 0 3px ${t.accentL}` : 'none'};
+      " onmouseover="this.style.transform='translateY(-2px)'" onmouseout="this.style.transform='translateY(0)'">
+      <!-- colour preview strip -->
+      <div style="height:64px;background:${t.bg};display:flex;align-items:center;justify-content:center;position:relative;font-size:24px;">
+        ${th.emoji}
+        <div style="position:absolute;top:8px;right:8px;width:10px;height:10px;border-radius:50%;background:${t.accent};"></div>
+        <div style="position:absolute;bottom:8px;left:10px;width:7px;height:7px;border-radius:50%;background:${THEMES[key][appMode].muted};"></div>
+        ${isActive ? `<div style="position:absolute;top:7px;left:8px;background:${t.accent};color:#fff;font-size:9px;font-weight:700;padding:2px 7px;border-radius:10px;font-family:system-ui,sans-serif;">✓ Active</div>` : ''}
+      </div>
+      <!-- info -->
+      <div style="padding:10px 12px 12px;">
+        <div style="font-family:'Almendra',serif;font-size:14px;color:${t.text};margin-bottom:2px;">${th.name}</div>
+        <div style="font-size:11px;color:${t.muted};font-family:system-ui,sans-serif;font-style:italic;">${th.desc}</div>
+        <!-- mini palette dots -->
+        <div style="display:flex;gap:5px;margin-top:8px;align-items:center;">
+          <div style="width:14px;height:14px;border-radius:50%;background:${t.bg};border:1px solid ${t.border};"></div>
+          <div style="width:14px;height:14px;border-radius:50%;background:${t.surface};border:1px solid ${t.border};"></div>
+          <div style="width:14px;height:14px;border-radius:50%;background:${t.accent};"></div>
+          <div style="width:14px;height:14px;border-radius:50%;background:${t.muted};"></div>
+          <div style="margin-left:auto;font-size:10px;font-weight:600;font-family:system-ui,sans-serif;color:${isActive ? t.accent : t.muted};">${isActive ? 'Selected' : 'Select →'}</div>
+        </div>
+      </div>
+    </div>`;
+  }).join('');
+}
+
+// init theme on load
+applyAppTheme(appTheme, appMode);
+
+// ════════════════════════════════════════════════
+//  REMINDER ROW HELPERS (LampGO creation)
+// ════════════════════════════════════════════════
+function addReminderRow(){
+  const container=document.getElementById('reminder-rows');
+  if(!container) return;
+  const row=document.createElement('div');
+  row.className='reminder-row';
+  row.style.cssText='display:grid;grid-template-columns:1fr auto;gap:10px;align-items:center;';
+  row.innerHTML=`<div style="display:flex;align-items:center;gap:9px;">
+    <span style="font-size:12px;color:var(--muted);white-space:nowrap;">Send reminder</span>
+    <input class="inp" type="number" min="1" max="60" value="3" style="width:64px;">
+    <span style="font-size:12px;color:var(--muted);white-space:nowrap;">days before closing</span>
+  </div>
+  <button class="btn btn-xs" style="color:var(--red);border:1px solid var(--red);background:transparent;" onclick="removeReminderRow(this)">✕</button>`;
+  container.appendChild(row);
+}
+
+function removeReminderRow(btn){
+  const rows=document.querySelectorAll('#reminder-rows .reminder-row');
+  if(rows.length<=1){toast('⚠','Keep at least one reminder',true);return;}
+  btn.closest('.reminder-row').remove();
+}
+
+function getReminderDays(){
+  const rows=document.querySelectorAll('#reminder-rows .reminder-row input[type="number"]');
+  return [...rows].map(inp=>parseInt(inp.value)||7).filter(d=>d>0).sort((a,b)=>b-a);
+}
+
+// ════════════════════════════════════════════════
+//  DRAFT SAVING
+// ════════════════════════════════════════════════
+// draft: {gid, fname, lname, username, email, addr1, addr2, city, state, zip, country, items, notes, savedAt}
+function saveDraft(){
+  const gid=formGOid;
+  const g=GOS[gid]; if(!g) return;
+
+  // Need at least email and name to send reminders
+  const email=document.getElementById('ff-em')?.value.trim();
+  const fname=document.getElementById('ff-fn')?.value.trim();
+  if(!email||!fname){
+    openModal('Save Draft','Enter at least your first name and email so we can send you reminders.','',
+      'btn-primary','Got it',null);
+    document.getElementById('ff-fn')?.focus();
+    return;
+  }
+  if(!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)){
+    toast('✕','Enter a valid email to save draft',true); return;
+  }
+
+  // remove existing draft handled by upsert with unique constraint
+
+  const draft={
+    id:'dft_'+Date.now(),
+    gid,
+    fname, lname:document.getElementById('ff-ln')?.value.trim()||'',
+    username:document.getElementById('ff-un')?.value.trim()||'',
+    email,
+    addr1:document.getElementById('ff-a1')?.value.trim()||'',
+    addr2:document.getElementById('ff-a2')?.value.trim()||'',
+    city:document.getElementById('ff-ci')?.value.trim()||'',
+    state:document.getElementById('ff-st')?.value.trim()||'',
+    zip:document.getElementById('ff-zp')?.value.trim()||'',
+    country:document.getElementById('ff-co')?.value.trim()||'United States',
+    items:g.items.map(it=>({itemId:it.id,qty:parseInt(document.getElementById('qty-'+it.id)?.value)||0})).filter(oi=>oi.qty>0),
+    notes:document.getElementById('ff-notes')?.value.trim()||'',
+    savedAt:new Date().toISOString(),
+    remindersScheduled:g.reminderDays||[7,3,1],
+    // EMAIL STUB — wire to Supabase Edge Function when backend is ready
+    emailStatus:'pending', // 'pending' | 'sent' | 'submitted'
+  };
+  DB.saveDraft({...draft, lampgoId: draft.gid}).catch(e=>console.error('draft save error',e));
+
+  // Show confirmation with reminder schedule
+  const deadline=g.deadline;
+  const scheduleInfo=deadline
+    ? `<div style="background:var(--surface2);border:1.5px solid var(--border);border-radius:9px;padding:13px 15px;margin-top:12px;">
+        <div style="font-size:11px;font-weight:600;color:var(--muted);text-transform:uppercase;letter-spacing:.06em;margin-bottom:8px;">📧 Reminder Schedule</div>
+        ${(g.reminderDays||[7,3,1]).map(d=>{
+          const date=new Date(deadline+'T12:00:00');
+          date.setDate(date.getDate()-d);
+          return `<div style="display:flex;justify-content:space-between;font-size:12px;padding:4px 0;border-bottom:1px solid var(--border);">
+            <span style="color:var(--muted);">${d} day${d!==1?'s':''} before closing</span>
+            <span style="font-family:'DM Mono',monospace;font-weight:600;color:var(--text);">${date.toLocaleDateString('en-US',{month:'short',day:'numeric'})}</span>
+          </div>`;
+        }).join('')}
+        <div style="font-size:11px;color:var(--muted);margin-top:8px;font-style:italic;">Reminders sent to <strong>${email}</strong><br>⚡ Live email delivery activates when Supabase is connected.</div>
+      </div>`
+    : `<div style="font-size:12px;color:var(--muted);margin-top:10px;font-style:italic;">No deadline set for this LampGO — the host will send reminders manually.</div>`;
+
+  openModal('🔖 Draft Saved!',
+    `Your order progress has been saved. We'll email ${email} with reminders before this LampGO closes so you don't miss out.`,
+    scheduleInfo,
+    'btn-primary','Back to Form',null);
+
+  toast('🔖','Draft saved! Reminders scheduled.');
+}
+
+// Restore draft when form loads
+async function restoreDraftIfExists(gid){
+  const email=ME?.email||'';
+  if(!email) return;
+  const draft=await DB.getDraft(gid, email);
+  if(!draft) return;
+  window._pendingDraft=draft;
+  // show banner
+  const banner=document.createElement('div');
+  banner.className='alert';
+  banner.style.cssText='background:var(--accent-ll);border:1.5px solid var(--accent);border-radius:9px;padding:12px 15px;font-size:13px;display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:16px;';
+  const savedDate=new Date(draft.created_at||Date.now()).toLocaleDateString();
+  banner.innerHTML=`<span>🔖 <strong>You have a saved draft</strong> for this LampGO from ${savedDate}.</span>
+    <div style="display:flex;gap:7px;flex-shrink:0;">
+      <button class="btn btn-primary btn-sm" onclick="loadDraft();this.closest('.alert').remove()">Restore</button>
+      <button class="btn btn-outline btn-sm" onclick="deleteDraft('${gid}','${email}');this.closest('.alert').remove()">Discard</button>
+    </div>`;
+  const formMain=document.getElementById('form-main');
+  if(formMain) formMain.insertBefore(banner, formMain.firstChild);
+}
+
+function loadDraft(draftId){
+  // draft data passed inline from restoreDraftIfExists banner
+  const draft=window._pendingDraft;if(!draft)return;
+  const g=GOS[draft.lampgo_id||draft.gid];if(!g)return;
+  // fill fields
+  const fields={
+    'ff-fn':draft.fname,'ff-ln':draft.lname,'ff-un':draft.username,
+    'ff-em':draft.email,'ff-a1':draft.addr1,'ff-a2':draft.addr2,
+    'ff-ci':draft.city,'ff-st':draft.state,'ff-zp':draft.zip,
+    'ff-co':draft.country,'ff-notes':draft.notes,
+  };
+  Object.entries(fields).forEach(([id,val])=>{ const el=document.getElementById(id); if(el) el.value=val||''; });
+  // restore quantities
+  draft.items.forEach(oi=>{
+    const inp=document.getElementById('qty-'+oi.itemId);
+    if(inp) inp.value=oi.qty;
+  });
+  calcTotal(draft.gid);
+  toast('🔖','Draft restored!');
+}
+
+async function deleteDraft(gid, email){
+  await DB.deleteDraft(gid, email||ME?.email||'');
+  toast('✕','Draft discarded');
+}
+
+// Host: save reminder days to LampGO when saving
+// (patched into saveGO)
+function getAndSaveReminders(goId){
+  const days=getReminderDays();
+  if(GOS[goId]) GOS[goId].reminderDays=days;
+}
+
+// ════════════════════════════════════════════════
+//  COLLECTION & RECYCLE CENTER DATA
+// ════════════════════════════════════════════════
+// collection item: {id, userId, name, imgData, fandom, characters, productType, artist,
+//   purchasedFrom, purchaseDate, itemPrice, shippingPaid, totalPaid,
+//   fromGOid, fromOrderId, shippingStatus, stillHave, forSale, salePrice, soldPrice, soldDate,
+//   isPrivate, createdAt}
+// message: {id, fromUid, toUid, itemId, text, createdAt, read}
+
+async function getCollection(uid){
+  if(collectionCache[uid]) return collectionCache[uid];
+  try{
+    const items = await DB.getCollection(uid);
+    collectionCache[uid] = Array.isArray(items) ? items.map(normCollItem) : [];
+  }catch(e){console.warn('getCollection error',e);collectionCache[uid]=[];}
+  return collectionCache[uid];
+}
+async function getAllForSale(){
+  if(marketCache.length>0) return marketCache;
+  try{
+    const items = await DB.getAllForSale();
+    marketCache = Array.isArray(items) ? items.map(i=>({...normCollItem(i), userId: i.user_id})) : [];
+  }catch(e){console.warn('getAllForSale error',e);marketCache=[];}
+  return marketCache;
+}
+function getMessages(){return [];} // stub — replaced by async openConv/renderInbox
+
+// Auto-populate collection from delivered orders
+async function syncCollectionFromOrders(){
+  if(!ME) return;
+  const coll=await getCollection(ME.id);
+  const existingOrderIds=new Set(coll.map(i=>i.fromOrderId).filter(Boolean));
+  const newItems=[];
+  Object.values(GOS).forEach(g=>{
+    g.orders.forEach(o=>{
+      if(o.status==='delivered'&&(o.email===ME.email||o.username===ME.username||o.buyerUserId===ME.id)){
+        o.items.forEach(oi=>{
+          const synKey=o.id+'_'+oi.itemId;
+          if(existingOrderIds.has(synKey)) return;
+          const it=g.items.find(i=>i.id===oi.itemId);
+          if(!it) return;
+          const perItemShip=o.total>0?(o.total-o.items.reduce((s,x)=>{const xi=g.items.find(i=>i.id===x.itemId);return s+(xi?Number(xi.price)*x.qty:0);},0))/o.items.length:0;
+          for(let q=0;q<oi.qty;q++){
+            newItems.push({
+              id:genUUID(),userId:ME.id,name:it.name,imgData:it.imgData||'',
+              fandom:g.fandom||'',characters:'',productType:'',
+              artist:g.linkedArtistId?(usersCache[g.linkedArtistId]?.artistProfile?.name||usersCache[g.linkedArtistId]?.username||''):'',
+              purchasedFrom:g.name,purchaseDate:o.createdAt.split('T')[0],
+              itemPrice:Number(it.price),shippingPaid:Math.max(0,perItemShip.toFixed(2)*1),
+              totalPaid:Number(it.price)+Math.max(0,perItemShip),
+              fromGOid:g.id,fromOrderId:synKey,
+              shippingStatus:o.status,stillHave:true,
+              forSale:false,salePrice:0,soldPrice:0,soldDate:'',
+              isPrivate:true,createdAt:new Date().toISOString()
+            });
+          }
+        });
+      }
+    });
+  });
+  for(const item of newItems){
+    await DB.upsertCollItem(item).catch(e=>console.warn('sync coll error',e));
+  }
+  if(newItems.length>0) delete collectionCache[ME.id];
+}
+
+// ── COLLECTION RENDER ──
+async function populateCollFilters(){
+  const coll=await getCollection(ME?.id||'');
+  const fandoms=[...new Set(coll.map(i=>i.fandom).filter(Boolean))].sort();
+  const types=[...new Set(coll.map(i=>i.productType).filter(Boolean))].sort();
+  const artists=[...new Set(coll.map(i=>i.artist).filter(Boolean))].sort();
+  const fs=document.getElementById('coll-fandom-f');
+  const ts=document.getElementById('coll-type-f');
+  const as=document.getElementById('coll-artist-f');
+  if(fs) fs.innerHTML=`<option value="">All Fandoms</option>`+fandoms.map(f=>`<option value="${escH(f)}">${escH(f)}</option>`).join('');
+  if(ts) ts.innerHTML=`<option value="">All Types</option>`+types.map(t=>`<option value="${escH(t)}">${escH(t)}</option>`).join('');
+  if(as) as.innerHTML=`<option value="">All Artists</option>`+artists.map(a=>`<option value="${escH(a)}">${escH(a)}</option>`).join('');
+}
+
+async function renderCollection(){
+  if(!ME) return;
+  await syncCollectionFromOrders();
+  let items=await getCollection(ME.id);
+  const q=(document.getElementById('coll-search')?.value||'').toLowerCase();
+  const ff=document.getElementById('coll-fandom-f')?.value||'';
+  const tf=document.getElementById('coll-type-f')?.value||'';
+  const af=document.getElementById('coll-artist-f')?.value||'';
+  const sf=document.getElementById('coll-status-f')?.value||'';
+  const showPriv=document.getElementById('coll-show-private')?.checked;
+  if(!showPriv) items=items.filter(i=>!i.isPrivate||i.userId===ME.id);
+  if(q) items=items.filter(i=>i.name.toLowerCase().includes(q)||(i.fandom||'').toLowerCase().includes(q)||(i.characters||'').toLowerCase().includes(q)||(i.artist||'').toLowerCase().includes(q));
+  if(ff) items=items.filter(i=>i.fandom===ff);
+  if(tf) items=items.filter(i=>i.productType===tf);
+  if(af) items=items.filter(i=>i.artist===af);
+  if(sf==='have') items=items.filter(i=>i.stillHave&&!i.soldDate);
+  if(sf==='sold') items=items.filter(i=>i.soldDate);
+  if(sf==='forsale') items=items.filter(i=>i.forSale&&!i.soldDate);
+  document.getElementById('coll-empty').style.display=items.length?'none':'block';
+  document.getElementById('coll-grid').innerHTML=items.map(item=>{
+    const badges=[];
+    if(item.isPrivate) badges.push(`<span class="cb-private">🔒 Private</span>`);
+    if(item.forSale&&!item.soldDate) badges.push(`<span class="cb-forsale">🛒 For Sale $${Number(item.salePrice).toFixed(2)}</span>`);
+    if(item.soldDate) badges.push(`<span class="cb-sold">✕ Sold</span>`);
+    if(item.fromGOid) badges.push(`<span class="cb-go">GO</span>`);
+    return `<div class="coll-card${item.isPrivate?' private-card':''}" onclick="openCollItem('${item.id}')">
+      <button class="priv-toggle" onclick="event.stopPropagation();togglePrivacy('${item.id}')" title="${item.isPrivate?'Make public':'Make private'}">${item.isPrivate?'🔒':'🌐'}</button>
+      <div class="coll-img">${item.imgData?`<img src="${item.imgData}" alt="">`:'🎁'}</div>
+      <div class="coll-body">
+        <div class="coll-name">${escH(item.name)}</div>
+        <div class="coll-sub">
+          ${item.fandom?`<span>📌 ${escH(item.fandom)}</span>`:''}
+          ${item.artist?`<span>🎨 ${escH(item.artist)}</span>`:''}
+          ${item.purchaseDate?`<span>📅 ${item.purchaseDate}</span>`:''}
+          ${item.merchType?`<span>${item.merchType==='official'?'🏢 Official':'🎨 Fan Merch'}</span>`:''}
+          <span style="font-family:'DM Mono',monospace;font-weight:600;color:var(--accent);">$${Number(item.totalPaid||item.itemPrice||0).toFixed(2)} paid</span>
+        </div>
+        <div class="coll-badges">${badges.join('')}</div>
+      </div>
+    </div>`;
+  }).join('');
+}
+
+async function togglePrivacy(itemId){
+  if(!ME) return;
+  const coll=await getCollection(ME.id);
+  const item=coll.find(i=>i.id===itemId);
+  if(!item) return;
+  item.isPrivate=!item.isPrivate;
+  await DB.upsertCollItem(item);
+  delete collectionCache[ME.id];
+  renderCollection();
+  toast(item.isPrivate?'🔒':'🌐',item.isPrivate?'Item set to private':'Item is now public');
+}
+
+async function openCollItem(itemId){
+  const coll=await getCollection(ME?.id||'');
+  const item=coll.find(i=>i.id===itemId);
+  if(!item) return;
+  // Max sale price = itemPrice + shippingPaid + 10%
+  const maxPrice=((item.itemPrice||0)+(item.shippingPaid||0))*1.10;
+  openModal(
+    item.name,
+    '',
+    `<div style="display:flex;gap:14px;margin-bottom:16px;flex-wrap:wrap;">
+      ${item.imgData?`<img src="${item.imgData}" style="width:90px;height:90px;object-fit:cover;border-radius:9px;flex-shrink:0;">`:''}
+      <div style="flex:1;min-width:0;">
+        <div style="font-size:12px;color:var(--muted);margin-bottom:5px;">
+          ${item.fandom?`<div>📌 <strong>Fandom:</strong> ${escH(item.fandom)}</div>`:''}
+          ${item.characters?`<div>👤 <strong>Characters:</strong> ${escH(item.characters)}</div>`:''}
+          ${item.productType?`<div>🏷 <strong>Type:</strong> ${escH(item.productType)}</div>`:''}
+          ${item.artist?`<div>🎨 <strong>Artist:</strong> ${escH(item.artist)}</div>`:''}
+          ${item.purchasedFrom?`<div>🛍 <strong>From:</strong> ${escH(item.purchasedFrom)}</div>`:''}
+          ${item.purchaseDate?`<div>📅 <strong>Date:</strong> ${item.purchaseDate}</div>`:''}
+          <div>💰 <strong>Item Price:</strong> $${Number(item.itemPrice||0).toFixed(2)}</div>
+          <div>📦 <strong>Shipping Paid:</strong> $${Number(item.shippingPaid||0).toFixed(2)}</div>
+          <div style="font-weight:600;color:var(--accent);">💵 Total Paid: $${Number(item.totalPaid||item.itemPrice||0).toFixed(2)}</div>
+        </div>
+      </div>
+    </div>
+    <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:14px;">
+      <button class="btn btn-outline btn-sm" onclick="editCollItem('${item.id}')">✏️ Edit</button>
+      ${!item.soldDate?`<button class="btn btn-sm ${item.forSale?'btn-red':'btn-green'}" onclick="toggleForSale('${item.id}')">${item.forSale?'Remove from Recycle Center':'♻️ List in Recycle Center'}</button>`:''}
+      ${item.forSale&&!item.soldDate?`<div style="font-size:12px;color:var(--muted);align-self:center;">Listed at <strong style="color:var(--green);">$${Number(item.salePrice).toFixed(2)}</strong> · Max allowed: <strong>$${maxPrice.toFixed(2)}</strong></div>`:''}
+      ${item.soldDate?`<div style="font-size:12px;color:var(--red);align-self:center;">Sold for $${Number(item.soldPrice).toFixed(2)} on ${item.soldDate}</div>`:''}
+    </div>
+    <div style="display:flex;gap:7px;justify-content:flex-end;">
+      <button class="btn btn-xs" style="color:var(--red);border:1px solid var(--red);background:transparent;" onclick="deleteCollItem('${item.id}')">Delete</button>
+    </div>`,
+    'btn-outline','Close',null
+  );
+}
+
+async function toggleForSale(itemId){
+  const coll=await getCollection(ME?.id||'');
+  const item=coll.find(i=>i.id===itemId);
+  if(!item) return;
+  if(item.forSale){item.forSale=false;item.salePrice=0;closeModal();renderCollection();toast('✓','Removed from Recycle Center');return;}
+  // Show price input with cap
+  const maxPrice=((item.itemPrice||0)+(item.shippingPaid||0))*1.10;
+  closeModal();
+  openModal(
+    '♻️ List in Recycle Center',
+    `Set your asking price. Maximum allowed is $${maxPrice.toFixed(2)} (item + shipping + 10% max markup to keep things fair for the community).`,
+    `<div class="field">
+      <label class="lbl">Sale Price <span class="required-star">*</span></label>
+      <input class="inp" type="number" step="0.01" min="0.01" max="${maxPrice.toFixed(2)}" id="sale-price-inp" placeholder="e.g. ${maxPrice.toFixed(2)}" value="${maxPrice.toFixed(2)}">
+      <div style="font-size:12px;color:var(--muted);margin-top:5px;">
+        Item price: $${Number(item.itemPrice||0).toFixed(2)} + Shipping: $${Number(item.shippingPaid||0).toFixed(2)} + 10% = <strong>Max $${maxPrice.toFixed(2)}</strong>
+      </div>
+      <div style="font-size:12px;color:var(--red);margin-top:4px;display:none;" id="sale-price-err">Price cannot exceed $${maxPrice.toFixed(2)}</div>
+    </div>`,
+    'btn-green','List Item ♻️',
+    ()=>{
+      const val=parseFloat(document.getElementById('sale-price-inp')?.value)||0;
+      if(val<=0){toast('✕','Enter a valid price',true);return;}
+      if(val>maxPrice+0.01){toast(`✕`,`Max price is $${maxPrice.toFixed(2)}`,true);return;}
+      item.forSale=true;item.salePrice=val;item.isPrivate=false;
+      DB.upsertCollItem(item).then(()=>{collectionCache={};renderCollection();});populateMktFilters();renderMarketplace();
+      toast('♻️','Listed in Recycle Center!');
+    }
+  );
+  // live validation on price input
+  setTimeout(()=>{
+    const inp=document.getElementById('sale-price-inp');
+    const err=document.getElementById('sale-price-err');
+    if(inp&&err) inp.oninput=()=>{
+      const over=parseFloat(inp.value)>maxPrice+0.01;
+      err.style.display=over?'block':'none';
+      inp.style.borderColor=over?'var(--red)':'';
+    };
+  },100);
+}
+
+async function editCollItem(itemId){
+  const coll=await getCollection(ME?.id||'');
+  const item=coll.find(i=>i.id===itemId);
+  if(!item) return;
+  closeModal();
+  openModal(
+    `Edit — ${item.name}`,
+    '',
+    `<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;">
+      <div class="field" style="grid-column:1/-1;"><label class="lbl">Item Name</label><input class="inp" id="ei-name" value="${escH(item.name)}"></div>
+      <div class="field"><label class="lbl">Fandom / IP</label><input class="inp" id="ei-fandom" value="${escH(item.fandom||'')}"></div>
+      <div class="field"><label class="lbl">Characters</label><input class="inp" id="ei-chars" value="${escH(item.characters||'')}" placeholder="e.g. Jotaro, Dio"></div>
+      <div class="field"><label class="lbl">Product Type</label><input class="inp" id="ei-type" value="${escH(item.productType||'')}" placeholder="e.g. Fanbook, Charm"></div>
+      <div class="field"><label class="lbl">Artist</label><input class="inp" id="ei-artist" value="${escH(item.artist||'')}"></div>
+      <div class="field"><label class="lbl">Purchased From</label><input class="inp" id="ei-from" value="${escH(item.purchasedFrom||'')}"></div>
+      <div class="field"><label class="lbl">Purchase Date</label><input class="inp" type="date" id="ei-date" value="${item.purchaseDate||''}"></div>
+      <div class="field"><label class="lbl">Item Price ($)</label><input class="inp" type="number" step="0.01" id="ei-price" value="${item.itemPrice||0}"></div>
+      <div class="field"><label class="lbl">Shipping Paid ($)</label><input class="inp" type="number" step="0.01" id="ei-ship" value="${item.shippingPaid||0}"></div>
+      <div class="field" style="grid-column:1/-1;display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
+        <label style="font-size:13px;display:flex;align-items:center;gap:6px;cursor:pointer;"><input type="checkbox" class="cb" id="ei-have" ${item.stillHave?'checked':''}> Still have this item</label>
+        <label style="font-size:13px;display:flex;align-items:center;gap:6px;cursor:pointer;"><input type="checkbox" class="cb" id="ei-private" ${item.isPrivate?'checked':''}> Keep private</label>
+      </div>
+      ${!item.stillHave||item.soldDate?`<div class="field"><label class="lbl">Sold Price ($)</label><input class="inp" type="number" step="0.01" id="ei-sold-price" value="${item.soldPrice||0}"></div><div class="field"><label class="lbl">Sold Date</label><input class="inp" type="date" id="ei-sold-date" value="${item.soldDate||''}"></div>`:''}
+    </div>`,
+    'btn-primary','Save Changes',
+    ()=>{
+      item.name=document.getElementById('ei-name')?.value.trim()||item.name;
+      item.fandom=document.getElementById('ei-fandom')?.value.trim()||'';
+      item.characters=document.getElementById('ei-chars')?.value.trim()||'';
+      item.productType=document.getElementById('ei-type')?.value.trim()||'';
+      item.artist=document.getElementById('ei-artist')?.value.trim()||'';
+      item.purchasedFrom=document.getElementById('ei-from')?.value.trim()||'';
+      item.purchaseDate=document.getElementById('ei-date')?.value||'';
+      item.itemPrice=parseFloat(document.getElementById('ei-price')?.value)||0;
+      item.shippingPaid=parseFloat(document.getElementById('ei-ship')?.value)||0;
+      item.totalPaid=item.itemPrice+item.shippingPaid;
+      item.stillHave=document.getElementById('ei-have')?.checked||false;
+      item.isPrivate=document.getElementById('ei-private')?.checked||false;
+      if(document.getElementById('ei-sold-price')){item.soldPrice=parseFloat(document.getElementById('ei-sold-price')?.value)||0;item.soldDate=document.getElementById('ei-sold-date')?.value||'';}
+      populateCollFilters();renderCollection();toast('✓','Item updated!');
+    }
+  );
+}
+
+async function deleteCollItem(itemId){
+  closeModal();
+  openModal('Delete item?','Remove this item from your collection? This cannot be undone.','','btn-red','Delete',async()=>{
+    await DB.deleteCollItem(itemId);
+    delete collectionCache[ME.id];
+    await renderCollection();
+    toast('✕','Item removed',true);
+  });
+}
+
+function openAddCollItem(){
+  openModal(
+    '＋ Add to Collection',
+    'Add an item manually, or paste a product URL to auto-fill.',
+    `<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;">
+      <div class="field" style="grid-column:1/-1;">
+        <label class="lbl">🔗 Import from URL (optional)</label>
+        <div style="display:flex;gap:7px;">
+          <input class="inp" id="na-url" placeholder="Paste Etsy, Carrd, or any product link…" style="flex:1;">
+          <button class="btn btn-outline btn-sm" onclick="importCollURL()" style="flex-shrink:0;">Import</button>
+        </div>
+        <div style="font-size:11px;color:var(--muted);margin-top:4px;">Fills in name, image & price from the page if available</div>
+      </div>
+      <div class="field" style="grid-column:1/-1;">
+        <label class="lbl">Item Name <span class="required-star">*</span></label>
+        <input class="inp" id="na-name" placeholder="e.g. Jayvik Fanbook">
+      </div>
+      <div class="field" style="grid-column:1/-1;">
+        <label class="lbl">Photo</label>
+        <div style="display:flex;align-items:center;gap:10px;">
+          <div id="na-img-preview" style="width:56px;height:56px;border-radius:8px;background:var(--surface2);border:1.5px solid var(--border);display:flex;align-items:center;justify-content:center;font-size:22px;overflow:hidden;">🎁</div>
+          <button class="btn btn-outline btn-sm" onclick="document.getElementById('na-img-inp').click()">Upload Photo</button>
+          <input type="file" id="na-img-inp" accept="image/*" style="display:none;" onchange="previewNewItem(this)">
+        </div>
+      </div>
+      <div class="field"><label class="lbl">Fandom / IP</label><input class="inp" id="na-fandom" placeholder="e.g. JJBA"></div>
+      <div class="field"><label class="lbl">Characters</label><input class="inp" id="na-chars" placeholder="e.g. Jotaro, Dio"></div>
+      <div class="field"><label class="lbl">Product Type</label><input class="inp" id="na-type" placeholder="e.g. Fanbook, Charm"></div>
+      <div class="field"><label class="lbl">Merch Type</label><select class="sel" id="na-merch-type"><option value="fan">🎨 Fan Merch (independent artist)</option><option value="official">🏢 Official Merch (IP / company)</option></select></div>
+      <div class="field"><label class="lbl">Artist</label><input class="inp" id="na-artist" placeholder="Artist name"></div>
+      <div class="field"><label class="lbl">Purchased From</label><input class="inp" id="na-from" placeholder="LampGO name or shop"></div>
+      <div class="field"><label class="lbl">Purchase Date</label><input class="inp" type="date" id="na-date"></div>
+      <div class="field"><label class="lbl">Item Price ($)</label><input class="inp" type="number" step="0.01" id="na-price" placeholder="0.00"></div>
+      <div class="field"><label class="lbl">Shipping Paid ($)</label><input class="inp" type="number" step="0.01" id="na-ship" placeholder="0.00"></div>
+      <div class="field" style="grid-column:1/-1;display:flex;align-items:center;gap:14px;">
+        <label style="font-size:13px;display:flex;align-items:center;gap:6px;cursor:pointer;"><input type="checkbox" class="cb" id="na-private" checked> Keep private</label>
+      </div>
+    </div>`,
+    'btn-primary','Add to Collection',
+    ()=>{
+      const name=document.getElementById('na-name')?.value.trim();
+      if(!name){toast('✕','Item name required',true);return;}
+      const itemPrice=parseFloat(document.getElementById('na-price')?.value)||0;
+      const shippingPaid=parseFloat(document.getElementById('na-ship')?.value)||0;
+      const newColl={
+        id:'ci_'+Date.now(),userId:ME.id,name,
+        imgData:document.getElementById('na-img-preview')?.querySelector('img')?.src||'',
+        fandom:document.getElementById('na-fandom')?.value.trim()||'',
+        characters:document.getElementById('na-chars')?.value.trim()||'',
+        productType:document.getElementById('na-type')?.value.trim()||'',
+        artist:document.getElementById('na-artist')?.value.trim()||'',
+        purchasedFrom:document.getElementById('na-from')?.value.trim()||'',
+        purchaseDate:document.getElementById('na-date')?.value||'',
+        itemPrice,shippingPaid,totalPaid:itemPrice+shippingPaid,
+        fromGOid:'',fromOrderId:'',shippingStatus:'delivered',
+        stillHave:true,forSale:false,salePrice:0,soldPrice:0,soldDate:'',
+        isPrivate:document.getElementById('na-private')?.checked||true,
+        merchType:document.getElementById('na-merch-type')?.value||'fan',
+        createdAt:new Date().toISOString()
+      };
+      showLoading('Saving...');
+      DB.upsertCollItem({...newColl,userId:ME.id,user_id:ME.id}).then(()=>{
+        delete collectionCache[ME.id];
+        hideLoading();
+        populateCollFilters();
+        renderCollection();
+        toast('✨','Added to collection!');
+      }).catch(e=>{hideLoading();console.error('coll save error',e);toast('✕','Save failed: '+e.message,true);});
+    }
+  );
+  setTimeout(()=>{document.getElementById('na-date').value=new Date().toISOString().split('T')[0];},50);
+}
+
+let newItemImgData='';
+function previewNewItem(inp){
+  const f=inp.files[0];if(!f)return;
+  const r=new FileReader();
+  r.onload=e=>{
+    newItemImgData=e.target.result;
+    const prev=document.getElementById('na-img-preview');
+    if(prev) prev.innerHTML=`<img src="${newItemImgData}" style="width:100%;height:100%;object-fit:cover;">`;
+  };
+  r.readAsDataURL(f);
+}
+
+// ── RECYCLE CENTER ──
+async function populateMktFilters(){
+  const items=await getAllForSale();
+  const fandoms=[...new Set(items.map(i=>i.fandom).filter(Boolean))].sort();
+  const types=[...new Set(items.map(i=>i.productType).filter(Boolean))].sort();
+  const chars=[...new Set(items.flatMap(i=>(i.characters||'').split(',').map(s=>s.trim())).filter(Boolean))].sort();
+  const artists=[...new Set(items.map(i=>i.artist).filter(Boolean))].sort();
+  const ff=document.getElementById('mkt-fandom-f');
+  const tf=document.getElementById('mkt-type-f');
+  const cf=document.getElementById('mkt-char-f');
+  const af=document.getElementById('mkt-artist-f');
+  if(ff){const pf=ff.value;ff.innerHTML=`<option value="">All Fandoms</option>`+fandoms.map(f=>`<option value="${escH(f)}">${escH(f)}</option>`).join('');ff.value=pf;}
+  if(tf){const pt=tf.value;tf.innerHTML=`<option value="">All Types</option>`+types.map(t=>`<option value="${escH(t)}">${escH(t)}</option>`).join('');tf.value=pt;}
+  if(cf){const pc=cf.value;cf.innerHTML=`<option value="">All Characters</option>`+chars.map(c=>`<option value="${escH(c)}">${escH(c)}</option>`).join('');cf.value=pc;}
+  if(af){const pa=af.value;af.innerHTML=`<option value="">All Artists</option>`+artists.map(a=>`<option value="${escH(a)}">${escH(a)}</option>`).join('');af.value=pa;}
+}
+
+async function renderMarketplace(){
+  let items=await getAllForSale();
+  const q=(document.getElementById('mkt-search')?.value||'').toLowerCase();
+  const ff=document.getElementById('mkt-fandom-f')?.value||'';
+  const tf=document.getElementById('mkt-type-f')?.value||'';
+  const cf=document.getElementById('mkt-char-f')?.value||'';
+  const af=document.getElementById('mkt-artist-f')?.value||'';
+  if(q) items=items.filter(i=>i.name.toLowerCase().includes(q)||(i.fandom||'').toLowerCase().includes(q)||(i.characters||'').toLowerCase().includes(q)||(i.artist||'').toLowerCase().includes(q));
+  if(ff) items=items.filter(i=>i.fandom===ff);
+  if(tf) items=items.filter(i=>i.productType===tf);
+  if(cf) items=items.filter(i=>(i.characters||'').toLowerCase().includes(cf.toLowerCase()));
+  if(af) items=items.filter(i=>i.artist===af);
+  document.getElementById('market-empty').style.display=items.length?'none':'block';
+  document.getElementById('market-grid').innerHTML=items.map(item=>{
+    const seller=usersCache[item.userId];
+    const maxPrice=((item.itemPrice||0)+(item.shippingPaid||0))*1.10;
+    const isOwn=ME&&item.userId===ME.id;
+    return `<div class="market-card" onclick="openMarketItem('${item.id}','${item.userId}')">
+      <div class="market-img">${item.imgData?`<img src="${item.imgData}" alt="">`:'♻️'}</div>
+      <div class="market-body">
+        <div class="market-name">${escH(item.name)}</div>
+        <div class="market-price">$${Number(item.salePrice).toFixed(2)}</div>
+        <div class="market-seller">@${seller?.username||'?'}</div>
+        <div class="market-tags">
+          ${item.fandom?`<span class="tag tag-fandom">${escH(item.fandom)}</span>`:''}
+          ${item.productType?`<span class="tag tag-product">${escH(item.productType)}</span>`:''}
+        </div>
+        <div style="font-size:10px;color:var(--muted2);margin-top:5px;">Max markup enforced · ≤$${maxPrice.toFixed(2)}</div>
+        ${isOwn?`<div style="font-size:10px;color:var(--accent);margin-top:3px;font-weight:600;">Your listing</div>`:''}
+      </div>
+    </div>`;
+  }).join('');
+}
+
+async function openMarketItem(itemId, ownerId){
+  const coll=await getCollection(ownerId);
+  const item=coll.find(i=>i.id===itemId);
+  if(!item) return;
+  const seller=usersCache[ownerId];
+  const isOwn=ME&&ownerId===ME.id;
+  const canMsg=ME&&(ME.role==='customer'||ME.role==='host'||ME.role==='owner'||ME.role==='artist')&&!isOwn;
+  const maxPrice=((item.itemPrice||0)+(item.shippingPaid||0))*1.10;
+  openModal(
+    item.name,
+    '',
+    `<div style="display:flex;gap:13px;margin-bottom:14px;flex-wrap:wrap;">
+      ${item.imgData?`<img src="${item.imgData}" style="width:100px;height:100px;object-fit:cover;border-radius:9px;flex-shrink:0;">`:''}
+      <div style="flex:1;min-width:0;font-size:12px;color:var(--muted);line-height:1.8;">
+        <div style="font-family:'Almendra',serif;font-size:20px;color:var(--green);margin-bottom:4px;">$${Number(item.salePrice).toFixed(2)}</div>
+        ${item.fandom?`<div>📌 ${escH(item.fandom)}</div>`:''}
+        ${item.characters?`<div>👤 ${escH(item.characters)}</div>`:''}
+        ${item.productType?`<div>🏷 ${escH(item.productType)}</div>`:''}
+        ${item.artist?`<div>🎨 ${escH(item.artist)}</div>`:''}
+        ${item.purchasedFrom?`<div>🛍 From: ${escH(item.purchasedFrom)}</div>`:''}
+        <div style="font-size:11px;color:var(--muted2);margin-top:4px;">Price cap: item + shipping + 10% = $${maxPrice.toFixed(2)} max</div>
+      </div>
+    </div>
+    <div style="background:var(--surface2);border-radius:9px;padding:11px 13px;font-size:13px;margin-bottom:14px;">
+      Sold by <strong>@${seller?.username||'?'}</strong>
+    </div>
+    ${canMsg?`<button class="btn btn-green btn-sm" onclick="startConversation('${ownerId}','${itemId}')">💬 Message Seller</button>`:''}
+    ${!ME?`<div class="alert alert-y" style="margin-top:10px;">Sign in to message the seller.</div>`:''}
+    ${isOwn?`<button class="btn btn-red btn-sm" onclick="toggleForSale('${itemId}');closeModal()">Remove Listing</button>`:''}`,
+    'btn-outline','Close',null
+  );
+}
+
+// ── MESSAGES ──
+// (activeConvKey declared in APP STATE above)
+
+function convKey(uid1,uid2,itemId){return [uid1,uid2].sort().join('_')+'_'+itemId;}
+
+async function startConversation(toUid, itemId){
+  closeModal();
+  activeConvKey=convKey(ME.id,toUid,itemId);
+  switchTab('view-messages',document.querySelectorAll('.tab')[document.querySelectorAll('.tab').length-2]);
+  renderInbox();
+  openConv(activeConvKey,toUid,itemId);
+}
+
+async function renderInbox(){
+  if(!ME) return;
+  const allMsgs=await DB.getInbox(ME.id);
+  const convMap={};
+  allMsgs.forEach(m=>{
+    const key=m.conv_key;
+    if(!convMap[key]||m.created_at>convMap[key].lastMsg.created_at){
+      const otherId=m.from_uid===ME.id?m.to_uid:m.from_uid;
+      convMap[key]={key,otherId,itemId:m.item_id,lastMsg:m,unread:0};
+    }
+    if(m.to_uid===ME.id&&!m.read) convMap[m.conv_key].unread=(convMap[m.conv_key].unread||0)+1;
+  });
+  const convs=Object.values(convMap).sort((a,b)=>b.lastMsg.created_at.localeCompare(a.lastMsg.created_at));
+  const totalUnread=convs.reduce((s,c)=>s+c.unread,0);
+  const badge=document.getElementById('msg-unread-badge');
+  if(badge){badge.style.display=totalUnread>0?'inline':'none';badge.textContent=totalUnread;}
+  // load user info for display
+  for(const c of convs){if(!usersCache[c.otherId]){const u=await DB.getUserById(c.otherId);if(u)usersCache[u.id]=normUser(u);}}
+  document.getElementById('inbox-list').innerHTML=convs.length
+    ?convs.map(c=>{
+      const other=usersCache[c.otherId];
+      return `<div class="inbox-row${c.unread?' unread':''}" onclick="openConv('${c.key}','${c.otherId}','${c.itemId||''}')">
+        <div class="inbox-av">${(other?.username||'?').slice(0,2).toUpperCase()}</div>
+        <div style="flex:1;min-width:0;">
+          <div style="font-weight:500;font-size:13px;">@${other?.username||'?'}</div>
+          <div style="font-size:11px;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${(c.lastMsg.text||'').slice(0,40)}${(c.lastMsg.text||'').length>40?'…':''}</div>
+        </div>
+        ${c.unread?'<div class="unread-dot"></div>':''}
+      </div>`;}).join('')
+    :'<div style="text-align:center;padding:28px;color:var(--muted);font-size:13px;">No conversations yet</div>';
+}
+
+async function openConv(key, otherId, itemId){
+  activeConvKey=key;
+  await DB.markRead(key, ME.id);
+  const other=usersCache[otherId]||(await DB.getUserById(otherId));
+  if(other&&!usersCache[other.id])usersCache[other.id]=normUser(other);
+  document.getElementById('conv-title').textContent='@'+(other?.username||'?');
+  document.getElementById('conv-empty').style.display='none';
+  document.getElementById('conv-thread').style.display='flex';
+  const msgs=await DB.getMessages(key);
+  const list=document.getElementById('msg-list');
+  list.innerHTML=msgs.map(m=>{
+    const isMe=m.from_uid===ME.id;
+    return `<div style="display:flex;flex-direction:column;align-items:${isMe?'flex-end':'flex-start'};">
+      <div class="${isMe?'msg-out':'msg-in'}">${escH(m.text)}</div>
+      <div class="msg-meta" style="text-align:${isMe?'right':'left'};color:var(--muted);">${new Date(m.created_at).toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'})}</div>
+    </div>`;
+  }).join('');
+  list.scrollTop=list.scrollHeight;
+  document.getElementById('msg-inp').dataset.toUid=otherId;
+  document.getElementById('msg-inp').dataset.itemId=itemId||'';
+  document.getElementById('msg-inp').focus();
+  await renderInbox();
+}
+
+async function sendMsg(){
+  if(!ME||!activeConvKey) return;
+  const inp=document.getElementById('msg-inp');
+  const text=inp.value.trim();
+  if(!text) return;
+  const toUid=inp.dataset.toUid;
+  const itemId=inp.dataset.itemId;
+  const msg={id:genUUID(),fromUid:ME.id,toUid,itemId,convKey:activeConvKey,text,read:false,createdAt:new Date().toISOString()};
+  inp.value='';
+  await DB.sendMessage(msg);
+  await openConv(activeConvKey,toUid,itemId);
+  await renderInbox();
+}
+
+function escH(s){return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');}
+
+function renderGOPicker(){
+  const myGos=myGOs().filter(g=>g.goStatus!=='complete').sort((a,b)=>b.createdAt.localeCompare(a.createdAt));
+  const picker=document.getElementById('ord-go-picker');
+  if(!picker) return;
+  if(!myGos.length){picker.innerHTML=`<div class="alert alert-y">You don't have any active LampGOs yet. Create one to get started!</div>`;return;}
+  picker.innerHTML=myGos.map(g=>{
+    const orders=g.orders.length;
+    const pending=g.orders.filter(o=>o.status==='pending').length;
+    return `<div onclick="openOrders('${g.id}')" style="background:var(--surface);border:1.5px solid var(--border);border-radius:var(--r);padding:13px 16px;margin-bottom:9px;cursor:pointer;display:flex;align-items:center;justify-content:space-between;gap:12px;transition:all .15s;" onmouseover="this.style.borderColor='var(--accent)'" onmouseout="this.style.borderColor='var(--border)'">
+      <div>
+        <div style="font-family:'Almendra',serif;font-size:15px;margin-bottom:3px;">${escH(g.name)}</div>
+        <div style="font-size:12px;color:var(--muted);">${orders} orders${pending>0?` · <span style="color:var(--accent);font-weight:600;">${pending} pending</span>`:''}</div>
+      </div>
+      <div class="btn btn-primary btn-sm">Manage →</div>
+    </div>`;
+  }).join('');
+}
+
+// ── FIX 4: Collection URL import ──
+async function importCollURL(){
+  const url=document.getElementById('na-url')?.value.trim();
+  if(!url){toast('✕','Enter a URL first',true);return;}
+  if(!/^https?:\/\//i.test(url)){toast('✕','Enter a full URL starting with https://',true);return;}
+  // Use allorigins proxy to bypass CORS
+  const proxy=`https://api.allorigins.win/get?url=${encodeURIComponent(url)}`;
+  const btn=document.querySelector('[onclick="importCollURL()"]');
+  if(btn){btn.textContent='Loading…';btn.disabled=true;}
+  try{
+    const res=await fetch(proxy);
+    const data=await res.json();
+    const html=data.contents||'';
+    // Extract OG title
+    const titleMatch=html.match(/<meta[^>]+property=["']og:title["'][^>]+content=["']([^"']+)["']/i)
+      ||html.match(/<meta[^>]+content=["']([^"']+)["'][^>]+property=["']og:title["']/i)
+      ||html.match(/<title[^>]*>([^<]+)<\/title>/i);
+    // Extract OG image
+    const imgMatch=html.match(/<meta[^>]+property=["']og:image["'][^>]+content=["']([^"']+)["']/i)
+      ||html.match(/<meta[^>]+content=["']([^"']+)["'][^>]+property=["']og:image["']/i);
+    // Extract price — look for common patterns
+    const priceMatch=html.match(/\$\s*(\d+(?:\.\d{2})?)/);
+    if(titleMatch&&titleMatch[1]){
+      const nameEl=document.getElementById('na-name');
+      if(nameEl&&!nameEl.value) nameEl.value=titleMatch[1].replace(/&amp;/g,'&').replace(/&#39;/g,"'").trim().slice(0,80);
+    }
+    if(priceMatch&&priceMatch[1]){
+      const priceEl=document.getElementById('na-price');
+      if(priceEl&&!priceEl.value) priceEl.value=priceMatch[1];
+    }
+    if(imgMatch&&imgMatch[1]){
+      // Store URL as imgData for now — user can replace with upload
+      const prev=document.getElementById('na-img-preview');
+      if(prev){
+        prev.innerHTML=`<img src="${imgMatch[1]}" style="width:100%;height:100%;object-fit:cover;" onerror="this.parentElement.innerHTML='🎁'">`;
+        newItemImgData=imgMatch[1];
+      }
+      toast('✓','Imported from URL!');
+    } else {
+      toast('⚠','Partially imported — image not found on page');
+    }
+  }catch(e){
+    toast('✕','Could not fetch URL — fill in manually',true);
+  }finally{
+    if(btn){btn.textContent='Import';btn.disabled=false;}
+  }
+}
+
+// ── FIX 7: Host+Artist role approval ──
+// Patch approveUser to handle pending-host-artist
+const _origApproveUser = approveUser;
+approveUser = async function(uid){
+  const u=usersCache[uid];if(!u)return;
+  if(u.role==='pending-host-artist'){
+    u.role='host-artist';
+    await supa.from('users').update({role:'host-artist',artist_profile:u.artist_profile||u.artistProfile||null}).eq('id',uid);
+    renderAdmin();populateBrowseFilters();
+    toast('📦🎨',`@${u.username} approved as Host+Artist!`);
+    return;
+  }
+  return _origApproveUser(uid);
+};
+</script>
+</body>
+</html>
