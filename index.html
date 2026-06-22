@@ -3628,7 +3628,7 @@ let appTheme=localStorage.getItem('lamplit-theme')||'forest';
 let appMode=localStorage.getItem('lamplit-mode')||'dark';
 let collView=localStorage.getItem('lamplit-coll-view')||'grid';
 // Server-side collection pagination state
-const COLL_PAGE_SIZE=48;
+const COLL_PAGE_SIZE=20;
 let collOffset=0;          // how many flat-list items are currently loaded
 let collTotal=0;           // total matching the current filters (from server count)
 let collPageItems=[];      // normalized items currently rendered in the flat grid
